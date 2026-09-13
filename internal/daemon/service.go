@@ -1899,7 +1899,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			effectiveCollaborationMode = collaborationModeDefault
 			usedDefaultOverride = true
 		}
-		options := s.turnStartOptions(ctx, effectiveCollaborationMode, thread)
+		options := s.turnStartOptionsForRoute(ctx, chatID, topicID, effectiveCollaborationMode, thread)
 		started = time.Now()
 		result, err = live.TurnStart(requestCtx, threadID, text, thread.CWD, options)
 		s.logAppServerCall("TurnStart", started, err, live, lifecycleFields{
@@ -1975,6 +1975,20 @@ func (s *Service) turnStartOptions(ctx context.Context, collaborationMode string
 	if options.Model == "" && thread != nil {
 		options.Model = strings.TrimSpace(thread.PreferredModel)
 	}
+	return options
+}
+
+func (s *Service) turnStartOptionsForRoute(ctx context.Context, chatID, topicID int64, collaborationMode string, thread *model.Thread) appserver.TurnStartOptions {
+	options := s.turnStartOptions(ctx, collaborationMode, thread)
+	if thread == nil {
+		return options
+	}
+	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+	if err != nil || agent == nil || agent.ThreadID != thread.ID {
+		return options
+	}
+	options.Model = strings.TrimSpace(agent.Model)
+	options.ReasoningEffort = normalizeReasoningEffort(agent.ReasoningEffort)
 	return options
 }
 

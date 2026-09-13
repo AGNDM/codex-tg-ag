@@ -4662,6 +4662,38 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 	}
 }
 
+func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	if err := service.store.SetState(ctx, codexModelStateKey, "gpt-5.6-luna"); err != nil {
+		t.Fatalf("SetState(model) failed: %v", err)
+	}
+	if err := service.store.SetState(ctx, codexReasoningStateKey, "low"); err != nil {
+		t.Fatalf("SetState(reasoning) failed: %v", err)
+	}
+	agent := model.LeadAgent{
+		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
+		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		Project: "telegram-agent", Status: "idle", Policy: defaultLeadPolicy,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	thread := &model.Thread{ID: "lead-thread", PreferredModel: "gpt-5.6-sol"}
+
+	leadOptions := service.turnStartOptionsForRoute(ctx, 123456789, 31, "", thread)
+	if leadOptions.Model != "gpt-5.6-sol" || leadOptions.ReasoningEffort != "medium" {
+		t.Fatalf("lead options = %#v, want Sol medium", leadOptions)
+	}
+
+	ordinaryOptions := service.turnStartOptionsForRoute(ctx, 123456789, 32, "", thread)
+	if ordinaryOptions.Model != "gpt-5.6-luna" || ordinaryOptions.ReasoningEffort != "low" {
+		t.Fatalf("ordinary options = %#v, want global Luna low", ordinaryOptions)
+	}
+}
+
 func TestUserInputResponsePayloadSkipsNilQuestionID(t *testing.T) {
 	t.Parallel()
 
