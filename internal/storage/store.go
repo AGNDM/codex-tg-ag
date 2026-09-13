@@ -91,6 +91,22 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS lead_agents (
+		agent_id TEXT PRIMARY KEY,
+		name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL,
+		thread_id TEXT NOT NULL UNIQUE,
+		model TEXT NOT NULL,
+		reasoning_effort TEXT NOT NULL,
+		project TEXT NOT NULL,
+		status TEXT NOT NULL,
+		policy TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE(chat_id, topic_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS observer_targets (
 		chat_key TEXT PRIMARY KEY,
 		chat_id INTEGER NOT NULL,
@@ -218,6 +234,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_name, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_bindings_thread_id ON thread_bindings(thread_id);
+	CREATE INDEX IF NOT EXISTS idx_lead_agents_updated_at ON lead_agents(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_observer_targets_enabled_updated_at ON observer_targets(enabled, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);

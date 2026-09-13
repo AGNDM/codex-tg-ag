@@ -171,6 +171,21 @@ type ThreadBinding struct {
 	UpdatedAt TimeString
 }
 
+type LeadAgent struct {
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	ChatID          int64      `json:"chat_id"`
+	TopicID         int64      `json:"topic_id"`
+	ThreadID        string     `json:"thread_id"`
+	Model           string     `json:"model"`
+	ReasoningEffort string     `json:"reasoning_effort"`
+	Project         string     `json:"project"`
+	Status          string     `json:"status"`
+	Policy          string     `json:"policy"`
+	CreatedAt       TimeString `json:"created_at"`
+	UpdatedAt       TimeString `json:"updated_at"`
+}
+
 type ObserverTarget struct {
 	ChatKey   string
 	ChatID    int64
