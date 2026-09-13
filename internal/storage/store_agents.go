@@ -50,6 +50,18 @@ func (s *Store) GetLeadAgentByTopic(ctx context.Context, chatID, topicID int64) 
 	return agent, err
 }
 
+func (s *Store) GetLeadAgentByName(ctx context.Context, name string) (*model.LeadAgent, error) {
+	row := s.db.QueryRowContext(ctx, `
+	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
+	       project, status, policy, created_at, updated_at
+	FROM lead_agents WHERE name = ? COLLATE NOCASE`, strings.TrimSpace(name))
+	agent, err := scanLeadAgent(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return agent, err
+}
+
 func (s *Store) ListLeadAgents(ctx context.Context) ([]model.LeadAgent, error) {
 	rows, err := s.db.QueryContext(ctx, `
 	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,

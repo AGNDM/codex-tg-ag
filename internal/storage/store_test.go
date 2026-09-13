@@ -48,6 +48,13 @@ func TestLeadAgentRegistryPersistsAndEnforcesIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLeadAgentByTopic failed: %v", err)
 	}
+	byName, err := reopened.GetLeadAgentByName(ctx, "research")
+	if err != nil {
+		t.Fatalf("GetLeadAgentByName failed: %v", err)
+	}
+	if byName == nil || byName.ID != agent.ID {
+		t.Fatalf("GetLeadAgentByName = %#v, want %s", byName, agent.ID)
+	}
 	if got == nil || got.ID != agent.ID || got.Model != "gpt-5.6-sol" || got.Project != agent.Project {
 		t.Fatalf("GetLeadAgentByTopic = %#v, want persisted agent %#v", got, agent)
 	}

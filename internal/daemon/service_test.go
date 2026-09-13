@@ -4595,6 +4595,73 @@ func TestLeadAgentReadCommands(t *testing.T) {
 	}
 }
 
+func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	stub := &stubSession{
+		threadStartResult: map[string]any{"thread": map[string]any{
+			"id": "lead-thread", "cwd": service.cfg.DefaultCWD, "title": "New thread",
+		}},
+	}
+	service.live = stub
+	service.liveConnected = true
+
+	response, err := service.handleCommand(ctx, 123456789, 21, "/agent create Builder", 0)
+	if err != nil {
+		t.Fatalf("handleCommand(/agent create) failed: %v", err)
+	}
+	if response == nil || response.ThreadID != "lead-thread" || response.TurnID != "started-turn" {
+		t.Fatalf("create response = %#v, want lead thread and initialization turn", response)
+	}
+	if len(stub.threadStartCalls) != 1 || stub.threadStartCalls[0] != service.cfg.DefaultCWD {
+		t.Fatalf("threadStartCalls = %#v, want default cwd", stub.threadStartCalls)
+	}
+	if len(stub.turnStartCalls) != 1 {
+		t.Fatalf("turnStartCalls = %#v, want one initialization turn", stub.turnStartCalls)
+	}
+	turn := stub.turnStartCalls[0]
+	if turn.model != "gpt-5.6-sol" || turn.reasoningEffort != "medium" {
+		t.Fatalf("initialization model = %q effort = %q, want Sol medium", turn.model, turn.reasoningEffort)
+	}
+	for _, want := range []string{"durable lead agent", "gpt-5.6-luna", "business-critical action", "Telegram"} {
+		if !strings.Contains(turn.message, want) {
+			t.Fatalf("initialization prompt missing %q:\n%s", want, turn.message)
+		}
+	}
+	agent, err := service.store.GetLeadAgentByTopic(ctx, 123456789, 21)
+	if err != nil {
+		t.Fatalf("GetLeadAgentByTopic failed: %v", err)
+	}
+	if agent == nil || agent.Name != "Builder" || agent.ThreadID != "lead-thread" || agent.Model != "gpt-5.6-sol" {
+		t.Fatalf("stored agent = %#v, want Builder Sol lead", agent)
+	}
+	binding, err := service.store.GetBinding(ctx, 123456789, 21)
+	if err != nil {
+		t.Fatalf("GetBinding failed: %v", err)
+	}
+	if binding == nil || binding.ThreadID != "lead-thread" {
+		t.Fatalf("binding = %#v, want lead-thread", binding)
+	}
+
+	again, err := service.handleCommand(ctx, 123456789, 21, "/agent create Duplicate", 0)
+	if err != nil {
+		t.Fatalf("duplicate /agent create failed: %v", err)
+	}
+	if !strings.Contains(again.Text, "already belongs to Builder") || len(stub.threadStartCalls) != 1 {
+		t.Fatalf("duplicate response = %#v calls = %#v, want no second thread", again, stub.threadStartCalls)
+	}
+
+	sameName, err := service.handleCommand(ctx, 123456789, 22, "/agent create builder", 0)
+	if err != nil {
+		t.Fatalf("same-name /agent create failed: %v", err)
+	}
+	if !strings.Contains(sameName.Text, "A lead named Builder already exists") || len(stub.threadStartCalls) != 1 {
+		t.Fatalf("same-name response = %#v calls = %#v, want no orphan thread", sameName, stub.threadStartCalls)
+	}
+}
+
 func TestUserInputResponsePayloadSkipsNilQuestionID(t *testing.T) {
 	t.Parallel()
 
