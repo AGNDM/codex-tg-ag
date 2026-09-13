@@ -4528,6 +4528,58 @@ func TestAnswerChoiceMissingTextDoesNotSendNil(t *testing.T) {
 	}
 }
 
+func TestLeadAgentReadCommands(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	agents := []model.LeadAgent{
+		{
+			ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 7,
+			ThreadID: "thread-builder", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+			Project: "telegram-agent", Status: "idle", Policy: "Discuss critical-path actions first.",
+		},
+		{
+			ID: "lead-research", Name: "Research", ChatID: 123456789, TopicID: 8,
+			ThreadID: "thread-research", Model: "gpt-6-astra", ReasoningEffort: "low",
+			Project: "market-research", Status: "working", Policy: "Discuss critical-path actions first.",
+		},
+	}
+	for _, agent := range agents {
+		if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+			t.Fatalf("CreateLeadAgent(%s) failed: %v", agent.ID, err)
+		}
+	}
+
+	list, err := service.handleCommand(ctx, 123456789, 7, "/agents", 0)
+	if err != nil {
+		t.Fatalf("handleCommand(/agents) failed: %v", err)
+	}
+	for _, want := range []string{"Lead agents (2)", "Builder", "telegram-agent", "Research", "market-research"} {
+		if !strings.Contains(list.Text, want) {
+			t.Fatalf("/agents text missing %q:\n%s", want, list.Text)
+		}
+	}
+
+	show, err := service.handleCommand(ctx, 123456789, 7, "/agent show", 0)
+	if err != nil {
+		t.Fatalf("handleCommand(/agent show) failed: %v", err)
+	}
+	for _, want := range []string{"Lead: Builder", "gpt-5.6-sol", "medium", "telegram-agent", "thread-builder"} {
+		if !strings.Contains(show.Text, want) {
+			t.Fatalf("/agent show text missing %q:\n%s", want, show.Text)
+		}
+	}
+
+	unbound, err := service.handleCommand(ctx, 123456789, 99, "/agent show", 0)
+	if err != nil {
+		t.Fatalf("handleCommand(unbound /agent show) failed: %v", err)
+	}
+	if !strings.Contains(unbound.Text, "No lead agent is assigned") {
+		t.Fatalf("unbound /agent show = %q, want assignment guidance", unbound.Text)
+	}
+}
+
 func TestUserInputResponsePayloadSkipsNilQuestionID(t *testing.T) {
 	t.Parallel()
 
