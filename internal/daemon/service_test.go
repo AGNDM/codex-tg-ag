@@ -4571,6 +4571,21 @@ func TestLeadAgentReadCommands(t *testing.T) {
 		}
 	}
 
+	updated, err := service.handleCommand(ctx, 123456789, 7, "/agent project agent-platform", 0)
+	if err != nil {
+		t.Fatalf("handleCommand(/agent project) failed: %v", err)
+	}
+	if !strings.Contains(updated.Text, "Builder is now assigned to project agent-platform") {
+		t.Fatalf("/agent project = %q, want update confirmation", updated.Text)
+	}
+	stored, err := service.store.GetLeadAgentByTopic(ctx, 123456789, 7)
+	if err != nil {
+		t.Fatalf("GetLeadAgentByTopic after project update failed: %v", err)
+	}
+	if stored == nil || stored.Project != "agent-platform" {
+		t.Fatalf("updated agent = %#v, want project agent-platform", stored)
+	}
+
 	unbound, err := service.handleCommand(ctx, 123456789, 99, "/agent show", 0)
 	if err != nil {
 		t.Fatalf("handleCommand(unbound /agent show) failed: %v", err)

@@ -24,9 +24,27 @@ func (s *Service) leadAgentsOverview(ctx context.Context) (*DirectResponse, erro
 }
 
 func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, rest string) (*DirectResponse, error) {
-	parts := strings.Fields(rest)
-	if len(parts) != 1 || strings.ToLower(parts[0]) != "show" {
-		return &DirectResponse{Text: "Usage: /agent show"}, nil
+	parts := strings.SplitN(strings.TrimSpace(rest), " ", 2)
+	action := strings.ToLower(parts[0])
+	if action == "project" {
+		if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+			return &DirectResponse{Text: "Usage: /agent project <project>"}, nil
+		}
+		agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+		if err != nil {
+			return nil, err
+		}
+		if agent == nil {
+			return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
+		}
+		project := strings.TrimSpace(parts[1])
+		if err := s.store.UpdateLeadAgentProject(ctx, agent.ID, project); err != nil {
+			return nil, err
+		}
+		return &DirectResponse{Text: fmt.Sprintf("%s is now assigned to project %s.", agent.Name, project), ThreadID: agent.ThreadID}, nil
+	}
+	if action != "show" || len(parts) != 1 {
+		return &DirectResponse{Text: "Usage: /agent show | /agent project <project>"}, nil
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
