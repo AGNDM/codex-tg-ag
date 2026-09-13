@@ -26,10 +26,10 @@ func (s *Store) CreateLeadAgent(ctx context.Context, agent model.LeadAgent) erro
 	_, err := s.db.ExecContext(ctx, `
 	INSERT INTO lead_agents(
 		agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
-		project, status, policy, created_at, updated_at
+		project_id, status, policy, created_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		agent.ID, agent.Name, agent.ChatID, agent.TopicID, agent.ThreadID, agent.Model,
-		agent.ReasoningEffort, agent.Project, agent.Status, agent.Policy,
+		agent.ReasoningEffort, agent.ProjectID, agent.Status, agent.Policy,
 		agent.CreatedAt, agent.UpdatedAt,
 	)
 	if err != nil {
@@ -41,7 +41,7 @@ func (s *Store) CreateLeadAgent(ctx context.Context, agent model.LeadAgent) erro
 func (s *Store) GetLeadAgentByTopic(ctx context.Context, chatID, topicID int64) (*model.LeadAgent, error) {
 	row := s.db.QueryRowContext(ctx, `
 	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
-	       project, status, policy, created_at, updated_at
+	       project_id, status, policy, created_at, updated_at
 	FROM lead_agents WHERE chat_id = ? AND topic_id = ?`, chatID, topicID)
 	agent, err := scanLeadAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -53,7 +53,7 @@ func (s *Store) GetLeadAgentByTopic(ctx context.Context, chatID, topicID int64) 
 func (s *Store) GetLeadAgentByName(ctx context.Context, name string) (*model.LeadAgent, error) {
 	row := s.db.QueryRowContext(ctx, `
 	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
-	       project, status, policy, created_at, updated_at
+	       project_id, status, policy, created_at, updated_at
 	FROM lead_agents WHERE name = ? COLLATE NOCASE`, strings.TrimSpace(name))
 	agent, err := scanLeadAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -65,7 +65,7 @@ func (s *Store) GetLeadAgentByName(ctx context.Context, name string) (*model.Lea
 func (s *Store) ListLeadAgents(ctx context.Context) ([]model.LeadAgent, error) {
 	rows, err := s.db.QueryContext(ctx, `
 	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
-	       project, status, policy, created_at, updated_at
+	       project_id, status, policy, created_at, updated_at
 	FROM lead_agents ORDER BY name COLLATE NOCASE, agent_id`)
 	if err != nil {
 		return nil, err
@@ -82,10 +82,10 @@ func (s *Store) ListLeadAgents(ctx context.Context) ([]model.LeadAgent, error) {
 	return agents, rows.Err()
 }
 
-func (s *Store) UpdateLeadAgentProject(ctx context.Context, agentID, project string) error {
+func (s *Store) UpdateLeadAgentProject(ctx context.Context, agentID, projectID string) error {
 	result, err := s.db.ExecContext(ctx, `
-	UPDATE lead_agents SET project = ?, updated_at = ? WHERE agent_id = ?`,
-		strings.TrimSpace(project), model.NowString(), strings.TrimSpace(agentID))
+	UPDATE lead_agents SET project_id = ?, updated_at = ? WHERE agent_id = ?`,
+		strings.TrimSpace(projectID), model.NowString(), strings.TrimSpace(agentID))
 	if err != nil {
 		return err
 	}
@@ -97,6 +97,18 @@ func (s *Store) UpdateLeadAgentProject(ctx context.Context, agentID, project str
 		return fmt.Errorf("lead agent %q not found", agentID)
 	}
 	return nil
+}
+
+func (s *Store) GetLeadAgentByProjectID(ctx context.Context, projectID string) (*model.LeadAgent, error) {
+	row := s.db.QueryRowContext(ctx, `
+	SELECT agent_id, name, chat_id, topic_id, thread_id, model, reasoning_effort,
+	       project_id, status, policy, created_at, updated_at
+	FROM lead_agents WHERE project_id = ?`, strings.TrimSpace(projectID))
+	agent, err := scanLeadAgent(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return agent, err
 }
 
 func (s *Store) UpdateLeadAgentStatusByThread(ctx context.Context, threadID, status string) error {
@@ -131,7 +143,7 @@ func scanLeadAgent(row scanner) (*model.LeadAgent, error) {
 	var agent model.LeadAgent
 	err := row.Scan(
 		&agent.ID, &agent.Name, &agent.ChatID, &agent.TopicID, &agent.ThreadID,
-		&agent.Model, &agent.ReasoningEffort, &agent.Project, &agent.Status,
+		&agent.Model, &agent.ReasoningEffort, &agent.ProjectID, &agent.Status,
 		&agent.Policy, &agent.CreatedAt, &agent.UpdatedAt,
 	)
 	if err != nil {

@@ -4533,16 +4533,23 @@ func TestLeadAgentReadCommands(t *testing.T) {
 
 	service := newTestService(t)
 	ctx := context.Background()
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": "project-telegram", "name": "telegram-agent", "roots": []any{map[string]any{"path": "/work/telegram"}}},
+		map[string]any{"id": "project-market", "name": "market-research", "roots": []any{map[string]any{"path": "/work/market"}}},
+		map[string]any{"id": "project-platform", "name": "agent-platform", "roots": []any{map[string]any{"path": "/work/platform"}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
 	agents := []model.LeadAgent{
 		{
 			ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 7,
 			ThreadID: "thread-builder", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-			Project: "telegram-agent", Status: "idle", Policy: "Discuss critical-path actions first.",
+			ProjectID: "project-telegram", Status: "idle", Policy: "Discuss critical-path actions first.",
 		},
 		{
 			ID: "lead-research", Name: "Research", ChatID: 123456789, TopicID: 8,
 			ThreadID: "thread-research", Model: "gpt-6-astra", ReasoningEffort: "low",
-			Project: "market-research", Status: "working", Policy: "Discuss critical-path actions first.",
+			ProjectID: "project-market", Status: "working", Policy: "Discuss critical-path actions first.",
 		},
 	}
 	for _, agent := range agents {
@@ -4575,14 +4582,14 @@ func TestLeadAgentReadCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCommand(/agent project) failed: %v", err)
 	}
-	if !strings.Contains(updated.Text, "Builder is now assigned to project agent-platform") {
+	if !strings.Contains(updated.Text, "Builder is now the lead for Codex Project agent-platform") {
 		t.Fatalf("/agent project = %q, want update confirmation", updated.Text)
 	}
 	stored, err := service.store.GetLeadAgentByTopic(ctx, 123456789, 7)
 	if err != nil {
 		t.Fatalf("GetLeadAgentByTopic after project update failed: %v", err)
 	}
-	if stored == nil || stored.Project != "agent-platform" {
+	if stored == nil || stored.ProjectID != "project-platform" {
 		t.Fatalf("updated agent = %#v, want project agent-platform", stored)
 	}
 
@@ -4676,7 +4683,7 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
 		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		Project: "telegram-agent", Status: "idle", Policy: defaultLeadPolicy,
+		ProjectID: "project-telegram", Status: "idle", Policy: defaultLeadPolicy,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -4702,7 +4709,7 @@ func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-axiom", Name: "Axiom", ChatID: 123456789, TopicID: 41,
 		ThreadID: "axiom-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		Project: "workspace", Status: "initializing", Policy: defaultLeadPolicy,
+		ProjectID: "project-workspace", Status: "initializing", Policy: defaultLeadPolicy,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -5025,6 +5032,8 @@ func (s *startCountingSession) StartCalls() int {
 type stubSession struct {
 	threadReads            map[string]map[string]any
 	threadListResult       map[string]any
+	projectListResult      map[string]any
+	threadProjectUpdates   []string
 	threadListCalls        int
 	threadListLimit        int
 	threadListCursor       string
@@ -5078,6 +5087,13 @@ func (s *stubSession) ThreadList(ctx context.Context, limit int, cursor string) 
 	s.threadListLimit = limit
 	s.threadListCursor = cursor
 	return s.threadListResult, nil
+}
+func (s *stubSession) ProjectList(ctx context.Context, limit int, cursor string) (map[string]any, error) {
+	return s.projectListResult, nil
+}
+func (s *stubSession) ThreadProjectUpdate(ctx context.Context, threadID, projectID string) (map[string]any, error) {
+	s.threadProjectUpdates = append(s.threadProjectUpdates, threadID+":"+projectID)
+	return map[string]any{}, nil
 }
 func (s *stubSession) ThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error) {
 	s.threadReadID = threadID

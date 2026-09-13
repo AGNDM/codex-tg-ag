@@ -6,9 +6,9 @@
 
 | Agent | 默认模型 | 默认推理强度 | 默认项目 | 当前职责由谁决定 |
 |---|---|---|---|---|
-| Axiom | `gpt-5.6-sol` | `medium` | `workspace` | 你在 Axiom topic 中布置 |
-| Gnome | `gpt-5.6-sol` | `medium` | `workspace` | 你在 Gnome topic 中布置 |
-| Dreamer | `gpt-5.6-sol` | `medium` | `workspace` | 你在 Dreamer topic 中布置 |
+| Axiom | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Axiom topic 中布置 |
+| Gnome | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Gnome topic 中布置 |
+| Dreamer | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Dreamer topic 中布置 |
 
 默认政策：大 Agent 负责与你讨论、规划、汇报并请求澄清；日常执行可以委派给 `gpt-5.6-luna` 子代理，但不会让你直接与 Luna 对话。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。低风险、例行的工具审批可以自动处理。
 
@@ -55,7 +55,8 @@
 登记当前负责的项目：
 
 ```text
-/agent project 项目名称
+/agent project
+/agent project Codex项目名称或ID
 ```
 
 这会更新控制面中的项目标签，不会自动移动 Git 仓库或改变文件路径。
@@ -143,7 +144,9 @@ Codex 提出文字问题时，直接回复对应的 `[Plan]` 或请求卡片即�
 | 命令 | 用途 |
 |---|---|
 | `/threads [数量或搜索词]` | 查看缓存的 Codex threads。 |
-| `/projects` | 查看缓存的项目和工作区。 |
+| `/agent project` | 从 Codex App Server 读取本机真实的 Codex Project。 |
+| `/agent project <名称或ID>` | 将当前 topic 的 lead 与一个 Codex Project 一对一绑定，并保留原主 thread/context。 |
+| `/projects` | 原 fork 的工作区/线程浏览器；它按 thread 的 cwd 展示，不是 lead 的 Codex Project 绑定来源。 |
 | `/show THREAD_ID` | 显示指定 thread 卡片。 |
 | `/bind THREAD_ID` | 把当前 chat/topic 绑定到已有 thread。不要用它覆盖 Lead topic 的固定绑定。 |
 | `/new PROJECT PROMPT` | 在选定项目中创建 thread 并执行首个 prompt。 |

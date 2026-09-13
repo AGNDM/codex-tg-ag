@@ -27,7 +27,7 @@ func TestLeadAgentRegistryPersistsAndEnforcesIdentity(t *testing.T) {
 		ThreadID:        "thread-research",
 		Model:           "gpt-5.6-sol",
 		ReasoningEffort: "medium",
-		Project:         "market-research",
+		ProjectID:       "project-market-research",
 		Status:          "idle",
 		Policy:          "Discuss critical-path actions in Telegram before proceeding.",
 	}
@@ -55,7 +55,7 @@ func TestLeadAgentRegistryPersistsAndEnforcesIdentity(t *testing.T) {
 	if byName == nil || byName.ID != agent.ID {
 		t.Fatalf("GetLeadAgentByName = %#v, want %s", byName, agent.ID)
 	}
-	if got == nil || got.ID != agent.ID || got.Model != "gpt-5.6-sol" || got.Project != agent.Project {
+	if got == nil || got.ID != agent.ID || got.Model != "gpt-5.6-sol" || got.ProjectID != agent.ProjectID {
 		t.Fatalf("GetLeadAgentByTopic = %#v, want persisted agent %#v", got, agent)
 	}
 
@@ -76,14 +76,14 @@ func TestLeadAgentRegistryPersistsAndEnforcesIdentity(t *testing.T) {
 		t.Fatal("CreateLeadAgent with case-insensitive duplicate name succeeded, want uniqueness error")
 	}
 
-	if err := reopened.UpdateLeadAgentProject(ctx, agent.ID, "telegram-agent"); err != nil {
+	if err := reopened.UpdateLeadAgentProject(ctx, agent.ID, "project-telegram-agent"); err != nil {
 		t.Fatalf("UpdateLeadAgentProject failed: %v", err)
 	}
 	listed, err := reopened.ListLeadAgents(ctx)
 	if err != nil {
 		t.Fatalf("ListLeadAgents failed: %v", err)
 	}
-	if len(listed) != 1 || listed[0].Project != "telegram-agent" {
+	if len(listed) != 1 || listed[0].ProjectID != "project-telegram-agent" {
 		t.Fatalf("ListLeadAgents = %#v, want one updated agent", listed)
 	}
 }

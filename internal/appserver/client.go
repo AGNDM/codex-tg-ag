@@ -300,6 +300,29 @@ func (c *Client) ThreadList(ctx context.Context, limit int, cursor string) (map[
 	return asMap(result), nil
 }
 
+func (c *Client) ProjectList(ctx context.Context, limit int, cursor string) (map[string]any, error) {
+	params := map[string]any{"limit": limit, "sortKey": "position", "sortDirection": "asc"}
+	if strings.TrimSpace(cursor) != "" {
+		params["cursor"] = cursor
+	}
+	result, err := c.Request(ctx, "project/list", params)
+	if err != nil {
+		return nil, err
+	}
+	return asMap(result), nil
+}
+
+func (c *Client) ThreadProjectUpdate(ctx context.Context, threadID, projectID string) (map[string]any, error) {
+	result, err := c.Request(ctx, "thread/metadata/update", map[string]any{
+		"threadId":  threadID,
+		"projectId": projectID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return asMap(result), nil
+}
+
 func (c *Client) ThreadFork(ctx context.Context, threadID, cwd string) (map[string]any, error) {
 	result, err := c.Request(ctx, "thread/fork", threadForkParams(threadID, cwd))
 	if err != nil {

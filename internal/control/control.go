@@ -57,6 +57,11 @@ type Threads interface {
 	ThreadStart(ctx context.Context, cwd string) (map[string]any, error)
 }
 
+type Projects interface {
+	ProjectList(ctx context.Context, limit int, cursor string) (map[string]any, error)
+	ThreadProjectUpdate(ctx context.Context, threadID, projectID string) (map[string]any, error)
+}
+
 type ThreadAdmin interface {
 	ThreadFork(ctx context.Context, threadID, cwd string) (map[string]any, error)
 	ThreadSetName(ctx context.Context, threadID, name string) (map[string]any, error)
@@ -101,6 +106,7 @@ type RuntimeSession interface {
 	Turns
 	ServerRequests
 	Models
+	Projects
 	Diagnostics
 }
 

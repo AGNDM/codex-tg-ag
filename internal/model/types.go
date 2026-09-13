@@ -179,11 +179,19 @@ type LeadAgent struct {
 	ThreadID        string     `json:"thread_id"`
 	Model           string     `json:"model"`
 	ReasoningEffort string     `json:"reasoning_effort"`
-	Project         string     `json:"project"`
+	ProjectID       string     `json:"project_id,omitempty"`
 	Status          string     `json:"status"`
 	Policy          string     `json:"policy"`
 	CreatedAt       TimeString `json:"created_at"`
 	UpdatedAt       TimeString `json:"updated_at"`
+}
+
+// CodexProject is the project identity owned by Codex App Server. Roots are
+// supplied by Codex and are not inferred from cached thread working directories.
+type CodexProject struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Roots []string `json:"roots"`
 }
 
 type ObserverTarget struct {

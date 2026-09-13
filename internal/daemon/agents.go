@@ -25,9 +25,10 @@ func (s *Service) leadAgentsOverview(ctx context.Context) (*DirectResponse, erro
 	if len(agents) == 0 {
 		return &DirectResponse{Text: "No lead agents configured. Use /agent create <name> in a dedicated topic."}, nil
 	}
+	projects, _ := s.codexProjects(ctx)
 	lines := []string{fmt.Sprintf("Lead agents (%d)", len(agents))}
 	for _, agent := range agents {
-		lines = append(lines, fmt.Sprintf("• %s — %s — %s", agent.Name, displayAgentProject(agent), agent.Status))
+		lines = append(lines, fmt.Sprintf("• %s — %s — %s", agent.Name, displayAgentProject(agent, projects), agent.Status))
 	}
 	return &DirectResponse{Text: strings.Join(lines, "\n")}, nil
 }
@@ -43,7 +44,7 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 	}
 	if action == "project" {
 		if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
-			return &DirectResponse{Text: "Usage: /agent project <project>"}, nil
+			return s.listCodexProjects(ctx)
 		}
 		agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 		if err != nil {
@@ -52,11 +53,43 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 		if agent == nil {
 			return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
 		}
-		project := strings.TrimSpace(parts[1])
-		if err := s.store.UpdateLeadAgentProject(ctx, agent.ID, project); err != nil {
+		projects, err := s.codexProjects(ctx)
+		if err != nil {
 			return nil, err
 		}
-		return &DirectResponse{Text: fmt.Sprintf("%s is now assigned to project %s.", agent.Name, project), ThreadID: agent.ThreadID}, nil
+		project, ok := resolveCodexProject(projects, strings.TrimSpace(parts[1]))
+		if !ok {
+			return &DirectResponse{Text: "No unique Codex Project matched that name or id. Use /agent project to list projects."}, nil
+		}
+		owner, err := s.store.GetLeadAgentByProjectID(ctx, project.ID)
+		if err != nil {
+			return nil, err
+		}
+		if owner != nil && owner.ID != agent.ID {
+			return &DirectResponse{Text: fmt.Sprintf("Codex Project %s is already bound to %s.", project.Name, owner.Name)}, nil
+		}
+		s.mu.RLock()
+		live := s.live
+		connected := s.liveConnected
+		s.mu.RUnlock()
+		if !connected || live == nil {
+			return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+		defer cancel()
+		if _, err := live.ThreadProjectUpdate(requestCtx, agent.ThreadID, project.ID); err != nil {
+			return nil, err
+		}
+		if err := s.store.UpdateLeadAgentProject(ctx, agent.ID, project.ID); err != nil {
+			return nil, err
+		}
+		if thread, getErr := s.store.GetThread(ctx, agent.ThreadID); getErr == nil && thread != nil && len(project.Roots) > 0 {
+			thread.CWD = project.Roots[0]
+			thread.ProjectName = project.Name
+			_, thread.DirectoryName = model.ProjectNameFromCWD(project.Roots[0])
+			_ = s.store.UpsertThread(ctx, *thread)
+		}
+		return &DirectResponse{Text: fmt.Sprintf("%s is now the lead for Codex Project %s. Its existing thread and context were preserved.", agent.Name, project.Name), ThreadID: agent.ThreadID}, nil
 	}
 	if action == "model" {
 		if len(parts) != 2 {
@@ -74,7 +107,8 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 	if agent == nil {
 		return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
 	}
-	return &DirectResponse{Text: renderLeadAgent(*agent), ThreadID: agent.ThreadID}, nil
+	projects, _ := s.codexProjects(ctx)
+	return &DirectResponse{Text: renderLeadAgent(*agent, projects), ThreadID: agent.ThreadID}, nil
 }
 
 func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int64, args string) (*DirectResponse, error) {
@@ -188,7 +222,7 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	agent := model.LeadAgent{
 		ID: "lead-" + randomToken(), Name: name, ChatID: chatID, TopicID: topicID,
 		ThreadID: thread.ID, Model: defaultLeadModel, ReasoningEffort: defaultLeadReasoning,
-		Project: project, Status: defaultLeadStatus, Policy: defaultLeadPolicy,
+		Status: defaultLeadStatus, Policy: defaultLeadPolicy,
 	}
 	if err := s.store.CreateLeadAgent(ctx, agent); err != nil {
 		return nil, err
@@ -218,33 +252,106 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	}
 	s.kickBootstrap()
 	return &DirectResponse{
-		Text:     fmt.Sprintf("Created lead %s on %s (%s). Project: %s.", name, defaultLeadModel, defaultLeadReasoning, displayAgentProject(agent)),
+		Text:     fmt.Sprintf("Created lead %s on %s (%s). Codex Project: unassigned; use /agent project to choose one.", name, defaultLeadModel, defaultLeadReasoning),
 		ThreadID: thread.ID, TurnID: turnID,
 	}, nil
 }
 
 func leadInitializationPrompt(agent model.LeadAgent) string {
-	cwd := strings.TrimSpace(agent.Project)
-	if cwd == "" {
-		cwd = "general"
-	}
-	return fmt.Sprintf(`You are %s, a durable lead agent responsible for project %s. Speak directly with the operator and own planning, decisions, progress reports, and requests for clarification. Delegate routine execution to gpt-5.6-luna subagents when useful, but never route the operator directly to a Luna subagent. Before pushing, merging, deploying, spending money, deleting data, changing production, or taking another business-critical action, discuss it with the operator in Telegram and wait for explicit direction. Routine low-risk tool approvals may be handled automatically. Acknowledge your role briefly and wait for the operator's first task.`, agent.Name, cwd)
+	return fmt.Sprintf(`You are %s, a durable lead agent. Speak directly with the operator and own planning, decisions, progress reports, and requests for clarification. You will be bound one-to-one to a Codex Project; treat that project's roots and this persistent thread as your stable workspace and context. Delegate routine execution to gpt-5.6-luna subagents when useful, but never route the operator directly to a Luna subagent. Before pushing, merging, deploying, spending money, deleting data, changing production, or taking another business-critical action, discuss it with the operator in Telegram and wait for explicit direction. Routine low-risk tool approvals may be handled automatically. Acknowledge your role briefly and wait for the operator's first task.`, agent.Name)
 }
 
-func renderLeadAgent(agent model.LeadAgent) string {
+func renderLeadAgent(agent model.LeadAgent, projects []model.CodexProject) string {
 	return strings.Join([]string{
 		fmt.Sprintf("Lead: %s", agent.Name),
 		fmt.Sprintf("Status: %s", agent.Status),
 		fmt.Sprintf("Model: %s", agent.Model),
 		fmt.Sprintf("Reasoning: %s", agent.ReasoningEffort),
-		fmt.Sprintf("Project: %s", displayAgentProject(agent)),
+		fmt.Sprintf("Codex Project: %s", displayAgentProject(agent, projects)),
 		fmt.Sprintf("Thread: %s", agent.ThreadID),
 	}, "\n")
 }
 
-func displayAgentProject(agent model.LeadAgent) string {
-	if strings.TrimSpace(agent.Project) == "" {
+func displayAgentProject(agent model.LeadAgent, projects []model.CodexProject) string {
+	if strings.TrimSpace(agent.ProjectID) == "" {
 		return "unassigned"
 	}
-	return agent.Project
+	for _, project := range projects {
+		if project.ID == agent.ProjectID {
+			return fmt.Sprintf("%s (%s)", project.Name, project.ID)
+		}
+	}
+	return agent.ProjectID
+}
+
+func (s *Service) codexProjects(ctx context.Context) ([]model.CodexProject, error) {
+	s.mu.RLock()
+	live := s.live
+	connected := s.liveConnected
+	s.mu.RUnlock()
+	if !connected || live == nil {
+		return nil, fmt.Errorf("live app-server session is not ready")
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+	defer cancel()
+	payload, err := live.ProjectList(requestCtx, 100, "")
+	if err != nil {
+		return nil, err
+	}
+	items, _ := payload["data"].([]any)
+	projects := make([]model.CodexProject, 0, len(items))
+	for _, raw := range items {
+		entry, _ := raw.(map[string]any)
+		project := model.CodexProject{ID: strings.TrimSpace(fmt.Sprint(entry["id"])), Name: strings.TrimSpace(fmt.Sprint(entry["name"]))}
+		for _, rootRaw := range anySlice(entry["roots"]) {
+			root, _ := rootRaw.(map[string]any)
+			path := strings.TrimSpace(fmt.Sprint(root["path"]))
+			if path != "" && path != "<nil>" {
+				project.Roots = append(project.Roots, path)
+			}
+		}
+		if project.ID != "" && project.ID != "<nil>" {
+			projects = append(projects, project)
+		}
+	}
+	return projects, nil
+}
+
+func anySlice(value any) []any {
+	items, _ := value.([]any)
+	return items
+}
+
+func resolveCodexProject(projects []model.CodexProject, selector string) (model.CodexProject, bool) {
+	var matches []model.CodexProject
+	for _, project := range projects {
+		if project.ID == selector || strings.EqualFold(project.Name, selector) {
+			matches = append(matches, project)
+		}
+	}
+	returnFirst := len(matches) == 1
+	if !returnFirst {
+		return model.CodexProject{}, false
+	}
+	return matches[0], true
+}
+
+func (s *Service) listCodexProjects(ctx context.Context) (*DirectResponse, error) {
+	projects, err := s.codexProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(projects) == 0 {
+		return &DirectResponse{Text: "Codex App Server has no Projects on this host yet."}, nil
+	}
+	lines := []string{"Codex Projects:"}
+	for _, project := range projects {
+		root := "no root"
+		if len(project.Roots) > 0 {
+			root = project.Roots[0]
+		}
+		lines = append(lines, fmt.Sprintf("• %s — %s\n  %s", project.Name, project.ID, root))
+	}
+	lines = append(lines, "", "Bind this lead with /agent project <name-or-id>.")
+	return &DirectResponse{Text: strings.Join(lines, "\n")}, nil
 }
