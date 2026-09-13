@@ -78,14 +78,15 @@ func (s *Service) syncThreadPanel(ctx context.Context, threadID string) {
 }
 
 func (s *Service) syncThreadPanelToTarget(ctx context.Context, target model.ObserverTarget, threadID string, forceNew bool, sourceMode string) {
+	thread, snapshot, err := s.loadThreadPanelSnapshot(ctx, threadID)
+	if err != nil || thread == nil || snapshot == nil {
+		return
+	}
+	s.syncLeadAgentStatus(ctx, threadID, snapshot)
 	s.mu.RLock()
 	sender := s.sender
 	s.mu.RUnlock()
 	if sender == nil {
-		return
-	}
-	thread, snapshot, err := s.loadThreadPanelSnapshot(ctx, threadID)
-	if err != nil || thread == nil || snapshot == nil {
 		return
 	}
 	pending, _ := s.store.GetLatestPendingApprovalForThread(ctx, threadID)

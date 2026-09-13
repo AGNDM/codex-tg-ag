@@ -99,6 +99,30 @@ func (s *Store) UpdateLeadAgentProject(ctx context.Context, agentID, project str
 	return nil
 }
 
+func (s *Store) UpdateLeadAgentStatusByThread(ctx context.Context, threadID, status string) error {
+	_, err := s.db.ExecContext(ctx, `
+	UPDATE lead_agents SET status = ?, updated_at = ? WHERE thread_id = ? AND status <> ?`,
+		strings.TrimSpace(status), model.NowString(), strings.TrimSpace(threadID), strings.TrimSpace(status))
+	return err
+}
+
+func (s *Store) UpdateLeadAgentModel(ctx context.Context, agentID, modelID, reasoningEffort string) error {
+	result, err := s.db.ExecContext(ctx, `
+	UPDATE lead_agents SET model = ?, reasoning_effort = ?, updated_at = ? WHERE agent_id = ?`,
+		strings.TrimSpace(modelID), strings.TrimSpace(reasoningEffort), model.NowString(), strings.TrimSpace(agentID))
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("lead agent %q not found", agentID)
+	}
+	return nil
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

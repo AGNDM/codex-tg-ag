@@ -58,8 +58,14 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 		}
 		return &DirectResponse{Text: fmt.Sprintf("%s is now assigned to project %s.", agent.Name, project), ThreadID: agent.ThreadID}, nil
 	}
+	if action == "model" {
+		if len(parts) != 2 {
+			return &DirectResponse{Text: "Usage: /agent model sol|astra [effort]"}, nil
+		}
+		return s.updateLeadAgentModel(ctx, chatID, topicID, parts[1])
+	}
 	if action != "show" || len(parts) != 1 {
-		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project <project>"}, nil
+		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project <project> | /agent model sol|astra [effort]"}, nil
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
@@ -69,6 +75,70 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 		return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
 	}
 	return &DirectResponse{Text: renderLeadAgent(*agent), ThreadID: agent.ThreadID}, nil
+}
+
+func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int64, args string) (*DirectResponse, error) {
+	fields := strings.Fields(args)
+	if len(fields) < 1 || len(fields) > 2 {
+		return &DirectResponse{Text: "Usage: /agent model sol|astra [effort]"}, nil
+	}
+	modelID := ""
+	defaultEffort := ""
+	switch strings.ToLower(fields[0]) {
+	case "sol", "gpt-5.6-sol":
+		modelID, defaultEffort = "gpt-5.6-sol", "medium"
+	case "astra", "gpt-6-astra":
+		modelID, defaultEffort = "gpt-6-astra", "low"
+	default:
+		return &DirectResponse{Text: "Lead agents must use Sol or Astra. Usage: /agent model sol|astra [effort]"}, nil
+	}
+	effort := defaultEffort
+	if len(fields) == 2 {
+		effort = normalizeReasoningEffort(fields[1])
+		if !validLeadReasoningEffort(effort) {
+			return &DirectResponse{Text: "Effort must be low, medium, high, xhigh, max, or ultra."}, nil
+		}
+	}
+	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
+	}
+	if err := s.store.UpdateLeadAgentModel(ctx, agent.ID, modelID, effort); err != nil {
+		return nil, err
+	}
+	if thread, getErr := s.store.GetThread(ctx, agent.ThreadID); getErr == nil && thread != nil {
+		thread.PreferredModel = modelID
+		_ = s.store.UpsertThread(ctx, *thread)
+	}
+	return &DirectResponse{Text: fmt.Sprintf("%s will use %s with %s reasoning on new turns.", agent.Name, modelID, effort), ThreadID: agent.ThreadID}, nil
+}
+
+func validLeadReasoningEffort(effort string) bool {
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) syncLeadAgentStatus(ctx context.Context, threadID string, snapshot *appserver.ThreadReadSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	status := "working"
+	switch {
+	case snapshot.WaitingOnApproval || snapshot.WaitingOnReply:
+		status = "waiting"
+	case strings.EqualFold(strings.TrimSpace(snapshot.LatestTurnStatus), "completed"):
+		status = "idle"
+	case isTerminalStatus(snapshot.LatestTurnStatus):
+		status = "attention"
+	}
+	_ = s.store.UpdateLeadAgentStatusByThread(ctx, threadID, status)
 }
 
 func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, name string) (*DirectResponse, error) {

@@ -4694,6 +4694,60 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	}
 }
 
+func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID: "lead-axiom", Name: "Axiom", ChatID: 123456789, TopicID: 41,
+		ThreadID: "axiom-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		Project: "workspace", Status: "initializing", Policy: defaultLeadPolicy,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+
+	changed, err := service.handleCommand(ctx, 123456789, 41, "/agent model astra low", 0)
+	if err != nil {
+		t.Fatalf("/agent model failed: %v", err)
+	}
+	if !strings.Contains(changed.Text, "gpt-6-astra with low reasoning") {
+		t.Fatalf("/agent model response = %q", changed.Text)
+	}
+	stored, err := service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if err != nil || stored == nil {
+		t.Fatalf("GetLeadAgentByTopic = %#v err=%v", stored, err)
+	}
+	if stored.Model != "gpt-6-astra" || stored.ReasoningEffort != "low" {
+		t.Fatalf("stored model = %q effort = %q, want Astra low", stored.Model, stored.ReasoningEffort)
+	}
+
+	blocked, err := service.handleCommand(ctx, 123456789, 41, "/agent model luna low", 0)
+	if err != nil {
+		t.Fatalf("blocked /agent model failed: %v", err)
+	}
+	if !strings.Contains(blocked.Text, "must use Sol or Astra") {
+		t.Fatalf("blocked model response = %q", blocked.Text)
+	}
+
+	service.syncLeadAgentStatus(ctx, agent.ThreadID, &appserver.ThreadReadSnapshot{LatestTurnStatus: "inProgress"})
+	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if stored.Status != "working" {
+		t.Fatalf("working status = %q", stored.Status)
+	}
+	service.syncLeadAgentStatus(ctx, agent.ThreadID, &appserver.ThreadReadSnapshot{LatestTurnStatus: "active", WaitingOnReply: true})
+	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if stored.Status != "waiting" {
+		t.Fatalf("waiting status = %q", stored.Status)
+	}
+	service.syncLeadAgentStatus(ctx, agent.ThreadID, &appserver.ThreadReadSnapshot{LatestTurnStatus: "completed"})
+	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if stored.Status != "idle" {
+		t.Fatalf("idle status = %q", stored.Status)
+	}
+}
+
 func TestUserInputResponsePayloadSkipsNilQuestionID(t *testing.T) {
 	t.Parallel()
 

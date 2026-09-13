@@ -308,6 +308,8 @@ func defaultCommands() []BotCommand {
 		{Command: "start", Description: "Bridge status and quick help"},
 		{Command: "help", Description: "Command list"},
 		{Command: "status", Description: "Daemon and routing status"},
+		{Command: "agents", Description: "List durable lead agents"},
+		{Command: "agent", Description: "Create or configure this topic's lead"},
 		{Command: "threads", Description: "List cached Codex threads"},
 		{Command: "projects", Description: "List cached projects"},
 		{Command: "newchat", Description: "Start a new Codex UI Chat"},
