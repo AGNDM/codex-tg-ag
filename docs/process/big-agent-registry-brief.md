@@ -25,11 +25,13 @@ Initial command surface:
 - `/agents` lists durable leads and their project/thread state.
 - `/agent create <name>` creates a Sol lead for the current topic.
 - `/agent show` shows the lead bound to the current topic.
-- `/agent project <project>` changes the lead's current registered project.
+- `/agent project <project>` changes the lead's current registered Codex Project.
+- `/agent policy` reports the embedded policy and applied version.
+- `/agent policy apply` injects the current policy into the persistent lead thread.
 
 ## Domain Model
 
-`LeadAgent`: stable id, display name, Telegram chat/topic route, Codex thread id, model, reasoning effort, current project, status, policy, timestamps.
+`LeadAgent`: stable id, display name, Telegram chat/topic route, Codex thread id, model, reasoning effort, official Codex project id, status, policy id/version, timestamps.
 
 The Codex `threadId` remains durable runtime identity. Telegram routes and the lead id are control-plane metadata stored in SQLite.
 
@@ -52,4 +54,6 @@ Add `internal/agents` as a cohesive registry service backed by `internal/storage
 - [ ] Normal messages resume the lead's durable Codex thread.
 - [ ] Luna delegation is never exposed as a direct operator routing target.
 - [ ] Existing project, thread, observer, and approval behavior remains compatible.
-- [ ] Critical-path policy is present in each lead's instructions and produces a Telegram discussion before the action.
+- [x] Critical-path and native delegation policy is versioned and can be injected into each persistent lead thread.
+- [x] Current-policy lead turns receive a compact runtime reminder after long context or compaction.
+- [x] Luna execution and Astra advice use Codex native custom agents rather than a daemon-owned scheduler.

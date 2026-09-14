@@ -17,6 +17,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/control"
+	"github.com/mideco-tech/codex-tg/internal/leadpolicy"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
@@ -1303,7 +1304,7 @@ func (s *Service) handleCommand(ctx context.Context, chatID, topicID int64, raw 
 	case "/start":
 		return &DirectResponse{Text: "ctr-go is online.\nUse /status, /threads, /projects, /context, or /observe all."}, nil
 	case "/help":
-		return &DirectResponse{Text: "Commands:\n/start\n/help\n/agents\n/agent create <name>\n/agent show\n/agent project\n/agent project <codex-project-name-or-id>\n/agent model sol|astra [effort]\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
+		return &DirectResponse{Text: "Commands:\n/start\n/help\n/agents\n/agent create <name>\n/agent show\n/agent project\n/agent project <codex-project-name-or-id>\n/agent model sol|astra [effort]\n/agent policy\n/agent policy apply\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
 	case "/agents":
 		return s.leadAgentsOverview(ctx)
 	case "/agent":
@@ -1794,6 +1795,20 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if thread == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown thread: %s", threadID)}, nil
 	}
+	var policyUpgradeAgent *model.LeadAgent
+	if agent, agentErr := s.store.GetLeadAgentByTopic(ctx, chatID, topicID); agentErr != nil {
+		return nil, agentErr
+	} else if agent != nil && agent.ThreadID == threadID && !leadpolicy.IsPolicyPrompt(text) {
+		switch leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) {
+		case leadpolicy.Current:
+			text = leadpolicy.RuntimeReminder(text)
+		case leadpolicy.NeedsApply:
+			text = leadpolicy.ApplyWithRequest(agent.Name, text)
+			policyUpgradeAgent = agent
+		case leadpolicy.Incompatible:
+			return &DirectResponse{Text: fmt.Sprintf("Lead policy %s v%d is newer than or incompatible with this daemon's %s v%d. Update the daemon or resolve the policy before starting another task.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
+		}
+	}
 	s.mu.RLock()
 	live := s.live
 	connected := s.liveConnected
@@ -1940,6 +1955,9 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	}
 	if strings.TrimSpace(turn) != "" {
 		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID)
+		if policyUpgradeAgent != nil {
+			_ = s.store.UpdateLeadAgentPolicy(ctx, policyUpgradeAgent.ID, leadpolicy.ID, leadpolicy.Version)
+		}
 	}
 	if _, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_after_start"); refreshErr != nil {
 		s.logLifecycle("thread_refresh_failed", lifecycleFields{

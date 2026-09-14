@@ -101,7 +101,8 @@ func (s *Store) initialize(ctx context.Context) error {
 		reasoning_effort TEXT NOT NULL,
 		project_id TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL,
-		policy TEXT NOT NULL,
+		policy_id TEXT NOT NULL DEFAULT '',
+		policy_version INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		UNIQUE(chat_id, topic_id)
@@ -256,6 +257,19 @@ func (s *Store) initialize(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_agents_project_id ON lead_agents(project_id) WHERE project_id <> ''`); err != nil {
 		return err
+	}
+	if err := s.ensureColumn(ctx, "lead_agents", "policy_id", `ALTER TABLE lead_agents ADD COLUMN policy_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "lead_agents", "policy_version", `ALTER TABLE lead_agents ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if legacyPolicy, err := s.hasColumn(ctx, "lead_agents", "policy"); err != nil {
+		return err
+	} else if legacyPolicy {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE lead_agents DROP COLUMN policy`); err != nil {
+			return fmt.Errorf("drop legacy lead policy text: %w", err)
+		}
 	}
 	if err := s.ensureColumn(ctx, "thread_panels", "source_mode", `ALTER TABLE thread_panels ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'explicit'`); err != nil {
 		return err

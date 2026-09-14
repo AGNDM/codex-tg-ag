@@ -1,0 +1,25 @@
+# ADR-020: Native Codex Lead Policy
+
+## Decision
+
+Lead orchestration uses Codex's native subagent tools and custom-agent configuration. The Telegram daemon does not implement a second scheduler or model loop.
+
+The daemon embeds a versioned `lead-default` policy, records `policy_id` and `policy_version` for each durable lead, and exposes `/agent policy` plus `/agent policy apply`. Applying a policy starts a normal turn in the lead's persistent App Server thread. If an outdated lead receives a normal task first, the daemon injects the full policy with that task and records the upgrade after App Server accepts the turn. Current-policy lead turns receive a compact reminder so the critical delegation and approval rules survive long context and compaction.
+
+Codex custom agents provide the model-specific workers:
+
+- `luna_executor`: `gpt-5.6-luna`, low reasoning, bounded execution.
+- `astra_advisor`: `gpt-6-astra`, low reasoning, read-only expert advice.
+
+The global Codex `[agents]` configuration enables native multi-agent tools, caps concurrent subagents at two, and defaults unspecified subagents to Luna low. The Sol lead remains the operator-facing agent and reviews all subagent results.
+
+Custom roles are standalone TOML files discovered by Codex under `~/.codex/agents/` (or project-local `.codex/agents/`) using their `name` field. They are not registered in a daemon-owned role table.
+
+## Consequences
+
+- Codex remains responsible for spawning, waiting, steering, and consolidating subagent work.
+- Policy changes are auditable and existing leads can report whether an update is pending.
+- Project `AGENTS.md` continues to define project-specific work rules. It does not replace the operator-level lead policy.
+- Applying a policy consumes one normal lead turn because the instruction becomes part of the durable thread history.
+- Runtime reminders add a small token cost to Telegram-originated lead messages.
+- A daemon rollback refuses to overwrite a newer or foreign policy version.

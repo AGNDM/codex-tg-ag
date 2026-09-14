@@ -181,7 +181,8 @@ type LeadAgent struct {
 	ReasoningEffort string     `json:"reasoning_effort"`
 	ProjectID       string     `json:"project_id,omitempty"`
 	Status          string     `json:"status"`
-	Policy          string     `json:"policy"`
+	PolicyID        string     `json:"policy_id"`
+	PolicyVersion   int        `json:"policy_version"`
 	CreatedAt       TimeString `json:"created_at"`
 	UpdatedAt       TimeString `json:"updated_at"`
 }

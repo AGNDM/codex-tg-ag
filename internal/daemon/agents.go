@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
+	"github.com/mideco-tech/codex-tg/internal/leadpolicy"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -14,7 +15,6 @@ const (
 	defaultLeadModel     = "gpt-5.6-sol"
 	defaultLeadReasoning = "medium"
 	defaultLeadStatus    = "initializing"
-	defaultLeadPolicy    = "Discuss critical-path actions in Telegram before proceeding. Delegate routine execution to Luna subagents; the operator communicates only with the lead."
 )
 
 func (s *Service) leadAgentsOverview(ctx context.Context) (*DirectResponse, error) {
@@ -97,8 +97,24 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 		}
 		return s.updateLeadAgentModel(ctx, chatID, topicID, parts[1])
 	}
+	if action == "policy" {
+		agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+		if err != nil {
+			return nil, err
+		}
+		if agent == nil {
+			return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
+		}
+		if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" || strings.EqualFold(strings.TrimSpace(parts[1]), "show") {
+			return &DirectResponse{Text: renderLeadPolicyStatus(*agent), ThreadID: agent.ThreadID}, nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(parts[1]), "apply") {
+			return &DirectResponse{Text: "Usage: /agent policy | /agent policy apply"}, nil
+		}
+		return s.applyLeadPolicy(ctx, chatID, topicID, *agent)
+	}
 	if action != "show" || len(parts) != 1 {
-		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project <project> | /agent model sol|astra [effort]"}, nil
+		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project [project] | /agent model sol|astra [effort] | /agent policy [apply]"}, nil
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
@@ -222,7 +238,7 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	agent := model.LeadAgent{
 		ID: "lead-" + randomToken(), Name: name, ChatID: chatID, TopicID: topicID,
 		ThreadID: thread.ID, Model: defaultLeadModel, ReasoningEffort: defaultLeadReasoning,
-		Status: defaultLeadStatus, Policy: defaultLeadPolicy,
+		Status: defaultLeadStatus, PolicyID: leadpolicy.ID,
 	}
 	if err := s.store.CreateLeadAgent(ctx, agent); err != nil {
 		return nil, err
@@ -230,7 +246,7 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	if err := s.store.SetBinding(ctx, chatID, topicID, thread.ID, model.BindingModeBound); err != nil {
 		return nil, err
 	}
-	prompt := leadInitializationPrompt(agent)
+	prompt := leadpolicy.ApplyPrompt(agent.Name)
 	turnPayload, turnErr := live.TurnStart(requestCtx, thread.ID, prompt, thread.CWD, appserver.TurnStartOptions{
 		Model: defaultLeadModel, ReasoningEffort: defaultLeadReasoning,
 	})
@@ -242,6 +258,7 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	}
 	turnID := appserverThreadTurnID(turnPayload)
 	if turnID != "" {
+		_ = s.store.UpdateLeadAgentPolicy(ctx, agent.ID, leadpolicy.ID, leadpolicy.Version)
 		thread.ActiveTurnID = turnID
 		thread.Status = "inProgress"
 		thread.LastPreview = prompt
@@ -257,8 +274,38 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 	}, nil
 }
 
-func leadInitializationPrompt(agent model.LeadAgent) string {
-	return fmt.Sprintf(`You are %s, a durable lead agent. Speak directly with the operator and own planning, decisions, progress reports, and requests for clarification. You will be bound one-to-one to a Codex Project; treat that project's roots and this persistent thread as your stable workspace and context. Delegate routine execution to gpt-5.6-luna subagents when useful, but never route the operator directly to a Luna subagent. Before pushing, merging, deploying, spending money, deleting data, changing production, or taking another business-critical action, discuss it with the operator in Telegram and wait for explicit direction. Routine low-risk tool approvals may be handled automatically. Acknowledge your role briefly and wait for the operator's first task.`, agent.Name)
+func (s *Service) applyLeadPolicy(ctx context.Context, chatID, topicID int64, agent model.LeadAgent) (*DirectResponse, error) {
+	if leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) == leadpolicy.Incompatible {
+		return &DirectResponse{Text: fmt.Sprintf("Cannot replace policy %s v%d with %s v%d. Update the daemon or resolve the policy explicitly.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
+	}
+	response, err := s.sendInputToThreadTurn(ctx, chatID, topicID, agent.ThreadID, "", leadpolicy.ApplyPrompt(agent.Name), "")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(response.TurnID) == "" {
+		return response, nil
+	}
+	if err := s.store.UpdateLeadAgentPolicy(ctx, agent.ID, leadpolicy.ID, leadpolicy.Version); err != nil {
+		return nil, err
+	}
+	response.Text = fmt.Sprintf("Applying %s v%d to %s's persistent lead thread.", leadpolicy.ID, leadpolicy.Version, agent.Name)
+	return response, nil
+}
+
+func renderLeadPolicyStatus(agent model.LeadAgent) string {
+	state := "current"
+	switch leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) {
+	case leadpolicy.NeedsApply:
+		state = "update available; run /agent policy apply"
+	case leadpolicy.Incompatible:
+		state = "incompatible/newer policy; update the daemon or resolve explicitly"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Lead policy: %s v%d", leadpolicy.ID, leadpolicy.Version),
+		fmt.Sprintf("Applied: %s v%d", firstNonEmpty(agent.PolicyID, "none"), agent.PolicyVersion),
+		fmt.Sprintf("Status: %s", state),
+		"Native workers: luna_executor (Luna low), astra_advisor (Astra low, read-only)",
+	}, "\n")
 }
 
 func renderLeadAgent(agent model.LeadAgent, projects []model.CodexProject) string {
@@ -268,6 +315,7 @@ func renderLeadAgent(agent model.LeadAgent, projects []model.CodexProject) strin
 		fmt.Sprintf("Model: %s", agent.Model),
 		fmt.Sprintf("Reasoning: %s", agent.ReasoningEffort),
 		fmt.Sprintf("Codex Project: %s", displayAgentProject(agent, projects)),
+		fmt.Sprintf("Policy: %s v%d", firstNonEmpty(agent.PolicyID, "none"), agent.PolicyVersion),
 		fmt.Sprintf("Thread: %s", agent.ThreadID),
 	}, "\n")
 }

@@ -10,7 +10,7 @@
 | Gnome | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Gnome topic 中布置 |
 | Dreamer | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Dreamer topic 中布置 |
 
-默认政策：大 Agent 负责与你讨论、规划、汇报并请求澄清；日常执行可以委派给 `gpt-5.6-luna` 子代理，但不会让你直接与 Luna 对话。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。低风险、例行的工具审批可以自动处理。
+默认政策 `lead-default v1`：大 Agent 负责与你讨论、规划、复核和汇报。它通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。Lead 自身保持 Sol；子代理不会直接与你对话。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
 
 ## 日常使用
 
@@ -33,6 +33,17 @@
 ```text
 /agent show
 ```
+
+查看或升级当前 Lead Policy：
+
+```text
+/agent policy
+/agent policy apply
+```
+
+`apply` 会在该 Lead 的持久 thread 中启动一次正常 turn，把最新版政策写入长期上下文。之后每次 Telegram 发起的 Lead turn 都会附带一段很短的政策提醒，以抵抗长上下文和 compaction 后的遗忘。
+
+如果 Policy 已升级但尚未手动 `apply`，下一条普通任务会把完整新 Policy 与该任务一起注入，并自动登记新版本，不需要先执行单独命令。
 
 状态含义：
 
@@ -130,12 +141,13 @@ Codex 提出文字问题时，直接回复对应的 `[Plan]` 或请求卡片即�
 
 它们会显示 Telegram 按钮菜单，设置持久保存在 SQLite 中。LeadAgent 不会被全局 `/model` 降级；要调整当前 Lead，使用 `/agent model ...`。
 
-额度建议：
+额度和委派规则：
 
 - 大部分日常交涉：Lead 使用 Sol `medium`。
-- 复杂规划或疑难问题：临时使用 `/agent model astra low`。
-- 问题解决后：切回 `/agent model sol medium`。
-- 重复、机械、可并行工作：让 Lead 委派 Luna，不要直接创建 Luna Lead。
+- 复杂规划或疑难问题：Lead 保持 Sol，并临时调用只读 `astra_advisor`。
+- 重复、机械、范围明确或适合并行的工作：Lead 调用 `luna_executor`。
+- 最多同时两个子代理；这台小服务器默认优先只开一个。
+- 只有你明确希望 Astra 持续直接与你对话时，才使用 `/agent model astra low` 切换整个 Lead。
 
 官方 OpenAI 模型指引建议从较低 reasoning effort 开始，只有在任务确实需要时再提高，以平衡响应速度与推理深度。
 

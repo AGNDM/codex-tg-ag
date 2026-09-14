@@ -171,6 +171,26 @@ Contract notes:
 - Telegram must not accept arbitrary local filesystem paths for thread creation.
 - The first prompt is required; create-only threads are out of scope for this slice.
 
+## Durable Lead Policy
+
+ADR: `docs/adr/ADR-020-native-lead-policy.md`; feature brief is
+`docs/process/big-agent-registry-brief.md`.
+
+Primary tests:
+
+- `internal/leadpolicy/policy_test.go::TestPolicyUsesNativeModelSpecificAgents`
+- `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
+- `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
+- `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`
+- `internal/daemon/service_test.go::TestCurrentLeadPolicyAddsRuntimeReminder`
+
+Contract notes:
+
+- Codex native subagent tools own spawn, wait, steering, and result consolidation.
+- The daemon stores a policy id/version, not mutable free-form policy text.
+- `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
+- The persistent lead remains Sol and remains the only operator-facing agent.
+
 ## Full Thread ID Access
 
 ADR: `docs/adr/ADR-007-parallel-thread-visual-identity.md`

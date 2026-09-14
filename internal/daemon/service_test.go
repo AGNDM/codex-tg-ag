@@ -4544,12 +4544,12 @@ func TestLeadAgentReadCommands(t *testing.T) {
 		{
 			ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 7,
 			ThreadID: "thread-builder", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-			ProjectID: "project-telegram", Status: "idle", Policy: "Discuss critical-path actions first.",
+			ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 1,
 		},
 		{
 			ID: "lead-research", Name: "Research", ChatID: 123456789, TopicID: 8,
 			ThreadID: "thread-research", Model: "gpt-6-astra", ReasoningEffort: "low",
-			ProjectID: "project-market", Status: "working", Policy: "Discuss critical-path actions first.",
+			ProjectID: "project-market", Status: "working", PolicyID: "lead-default", PolicyVersion: 1,
 		},
 	}
 	for _, agent := range agents {
@@ -4571,6 +4571,10 @@ func TestLeadAgentReadCommands(t *testing.T) {
 	show, err := service.handleCommand(ctx, 123456789, 7, "/agent show", 0)
 	if err != nil {
 		t.Fatalf("handleCommand(/agent show) failed: %v", err)
+	}
+	policy, err := service.handleCommand(ctx, 123456789, 7, "/agent policy", 0)
+	if err != nil || !strings.Contains(policy.Text, "Lead policy: lead-default v1") || !strings.Contains(policy.Text, "Status: current") {
+		t.Fatalf("/agent policy = %#v err=%v", policy, err)
 	}
 	for _, want := range []string{"Lead: Builder", "gpt-5.6-sol", "medium", "telegram-agent", "thread-builder"} {
 		if !strings.Contains(show.Text, want) {
@@ -4632,7 +4636,7 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 	if turn.model != "gpt-5.6-sol" || turn.reasoningEffort != "medium" {
 		t.Fatalf("initialization model = %q effort = %q, want Sol medium", turn.model, turn.reasoningEffort)
 	}
-	for _, want := range []string{"durable lead agent", "gpt-5.6-luna", "business-critical action", "Telegram"} {
+	for _, want := range []string{"Lead Agent Policy", "luna_executor", "astra_advisor", "Critical path"} {
 		if !strings.Contains(turn.message, want) {
 			t.Fatalf("initialization prompt missing %q:\n%s", want, turn.message)
 		}
@@ -4641,7 +4645,7 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLeadAgentByTopic failed: %v", err)
 	}
-	if agent == nil || agent.Name != "Builder" || agent.ThreadID != "lead-thread" || agent.Model != "gpt-5.6-sol" {
+	if agent == nil || agent.Name != "Builder" || agent.ThreadID != "lead-thread" || agent.Model != "gpt-5.6-sol" || agent.PolicyID != "lead-default" || agent.PolicyVersion != 1 {
 		t.Fatalf("stored agent = %#v, want Builder Sol lead", agent)
 	}
 	binding, err := service.store.GetBinding(ctx, 123456789, 21)
@@ -4669,6 +4673,118 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 	}
 }
 
+func TestLeadPolicyStatusAndApplyUsePersistentThread(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 51,
+		ThreadID: "lead-policy-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-policy", Status: "idle", PolicyID: "lead-default", PolicyVersion: 0,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: agent.ThreadID, Title: "Builder", CWD: "/old", Status: "idle", PreferredModel: "gpt-5.6-sol"}); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": "project-policy", "name": "Builder", "roots": []any{map[string]any{"path": "/projects/builder"}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
+
+	status, err := service.handleCommand(ctx, agent.ChatID, agent.TopicID, "/agent policy", 0)
+	if err != nil || !strings.Contains(status.Text, "update available") {
+		t.Fatalf("policy status = %#v err=%v", status, err)
+	}
+	response, err := service.handleCommand(ctx, agent.ChatID, agent.TopicID, "/agent policy apply", 0)
+	if err != nil {
+		t.Fatalf("policy apply failed: %v", err)
+	}
+	if response.TurnID == "" || !strings.Contains(response.Text, "Applying lead-default v1") {
+		t.Fatalf("policy apply response = %#v", response)
+	}
+	if len(stub.turnStartCalls) != 1 || !strings.Contains(stub.turnStartCalls[0].message, "luna_executor") || !strings.Contains(stub.turnStartCalls[0].message, "astra_advisor") {
+		t.Fatalf("policy turn = %#v", stub.turnStartCalls)
+	}
+	stored, err := service.store.GetLeadAgentByTopic(ctx, agent.ChatID, agent.TopicID)
+	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != 1 {
+		t.Fatalf("stored policy = %#v err=%v", stored, err)
+	}
+}
+
+func TestCurrentLeadPolicyAddsRuntimeReminder(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID: "lead-reminder", Name: "Reminder", ChatID: 123456789, TopicID: 52,
+		ThreadID: "lead-reminder-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-reminder", Status: "idle", PolicyID: "lead-default", PolicyVersion: 1,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: agent.ThreadID, Title: "Reminder", CWD: "/old", Status: "idle", PreferredModel: "gpt-5.6-sol"}); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": "project-reminder", "name": "Reminder", "roots": []any{map[string]any{"path": "/projects/reminder"}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
+	_, err := service.sendInputToThreadTurn(ctx, agent.ChatID, agent.TopicID, agent.ThreadID, "", "fix the issue", "")
+	if err != nil {
+		t.Fatalf("sendInputToThreadTurn failed: %v", err)
+	}
+	if len(stub.turnStartCalls) != 1 {
+		t.Fatalf("turnStartCalls = %#v", stub.turnStartCalls)
+	}
+	turn := stub.turnStartCalls[0]
+	for _, want := range []string{"runtime reminder", "luna_executor", "astra_advisor", "Operator request:\nfix the issue"} {
+		if !strings.Contains(turn.message, want) {
+			t.Fatalf("runtime message missing %q:\n%s", want, turn.message)
+		}
+	}
+	if turn.cwd != "/projects/reminder" || turn.model != "gpt-5.6-sol" || turn.reasoningEffort != "medium" {
+		t.Fatalf("turn route = %#v", turn)
+	}
+}
+
+func TestOutdatedLeadPolicyUpgradesOnNextRequest(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID: "lead-upgrade", Name: "Upgrade", ChatID: 123456789, TopicID: 53,
+		ThreadID: "lead-upgrade-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-upgrade", Status: "idle",
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: agent.ThreadID, Title: "Upgrade", CWD: "/old", Status: "idle", PreferredModel: "gpt-5.6-sol"}); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": "project-upgrade", "name": "Upgrade", "roots": []any{map[string]any{"path": "/projects/upgrade"}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
+	_, err := service.sendInputToThreadTurn(ctx, agent.ChatID, agent.TopicID, agent.ThreadID, "", "start the task", "")
+	if err != nil {
+		t.Fatalf("sendInputToThreadTurn failed: %v", err)
+	}
+	if len(stub.turnStartCalls) != 1 || !strings.Contains(stub.turnStartCalls[0].message, "Lead Agent Policy") || !strings.Contains(stub.turnStartCalls[0].message, "## Operator request\n\nstart the task") {
+		t.Fatalf("upgrade turn = %#v", stub.turnStartCalls)
+	}
+	stored, err := service.store.GetLeadAgentByTopic(ctx, agent.ChatID, agent.TopicID)
+	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != 1 {
+		t.Fatalf("stored policy = %#v err=%v", stored, err)
+	}
+}
+
 func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	t.Parallel()
 
@@ -4683,7 +4799,7 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
 		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-telegram", Status: "idle", Policy: defaultLeadPolicy,
+		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 1,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -4708,7 +4824,7 @@ func TestLeadAgentProjectRootComesFromCodexProject(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
 		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-telegram", Status: "idle", Policy: defaultLeadPolicy,
+		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 1,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -4733,7 +4849,7 @@ func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-axiom", Name: "Axiom", ChatID: 123456789, TopicID: 41,
 		ThreadID: "axiom-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-workspace", Status: "initializing", Policy: defaultLeadPolicy,
+		ProjectID: "project-workspace", Status: "initializing", PolicyID: "lead-default", PolicyVersion: 1,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
