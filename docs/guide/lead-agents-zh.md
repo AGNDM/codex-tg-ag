@@ -10,6 +10,8 @@
 | Gnome | `gpt-5.6-sol` | `medium` | Gnome Codex Project | 你在 Gnome topic 中布置 |
 | Dreamer | `gpt-5.6-sol` | `medium` | Dreamer Codex Project | 你在 Dreamer topic 中布置 |
 
+Axiom 的 Project 已指定为本仓库的长期开发与维护 Project；其接管范围、服务器环境、验证流程和首个审计任务见 [`docs/handoff/axiom-telegram-agent.md`](../handoff/axiom-telegram-agent.md)。Gnome 与 Dreamer 保持各自独立 Project，不参与本仓库的日常所有权。
+
 默认政策 `lead-default v2`：大 Agent 负责与你讨论、规划、复核和汇报。它知道自己运行在资源有限的 Azure Linux 小服务器上，由 Codex、Codex App Server 和 `codex-tg` Telegram bridge 组成；Telegram 是交互与控制层，Codex 才是 turn、工具、sandbox、审批和原生子代理的运行时。每个 Lead 的持久 thread 一对一绑定真实 Codex Project，并以 Project roots、thread 历史、`AGENTS.md` 和仓库文档作为稳定上下文。
 
 Lead 通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。Lead 自身保持 Sol；子代理不会直接与你对话。为适应小服务器，通常一次只运行一个子代理，确有独立性和时间收益时才并发两个。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
