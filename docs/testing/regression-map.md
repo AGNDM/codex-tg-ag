@@ -179,6 +179,7 @@ ADR: `docs/adr/ADR-020-native-lead-policy.md`; feature brief is
 Primary tests:
 
 - `internal/leadpolicy/policy_test.go::TestPolicyUsesNativeModelSpecificAgents`
+- `internal/appserver/client_test.go::TestTurnStartParamsIncludesOrdinaryTurnModelOverride`
 - `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
 - `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
 - `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`

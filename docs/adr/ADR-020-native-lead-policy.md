@@ -13,6 +13,8 @@ Codex custom agents provide the model-specific workers:
 
 The global Codex `[agents]` configuration enables native multi-agent tools, caps concurrent subagents at two, and defaults unspecified subagents to Luna low. The Sol lead remains the operator-facing agent and reviews all subagent results.
 
+Every Telegram-started lead turn sends the App Server `turn/start` top-level `model` and `reasoning_effort` overrides, including ordinary turns outside collaboration mode. This makes the persisted Sol lead setting effective instead of relying on the thread's previous model.
+
 Custom roles are standalone TOML files discovered by Codex under `~/.codex/agents/` (or project-local `.codex/agents/`) using their `name` field. They are not registered in a daemon-owned role table.
 
 ## Consequences

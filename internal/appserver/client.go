@@ -438,7 +438,14 @@ func turnStartParams(threadID, message, cwd string, options TurnStartOptions) (m
 		params["cwd"] = cwd
 	}
 	mode := normalizeCollaborationMode(options.CollaborationMode)
-	if mode != "" {
+	if mode == "" {
+		if model := strings.TrimSpace(options.Model); model != "" {
+			params["model"] = model
+		}
+		if effort := normalizeReasoningEffort(options.ReasoningEffort); effort != "" {
+			params["reasoning_effort"] = effort
+		}
+	} else {
 		model := strings.TrimSpace(options.Model)
 		if model == "" {
 			return nil, fmt.Errorf("codex model is required for collaboration mode %q", mode)

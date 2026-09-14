@@ -124,6 +124,25 @@ func TestTurnStartParamsIncludesCollaborationMode(t *testing.T) {
 	}
 }
 
+func TestTurnStartParamsIncludesOrdinaryTurnModelOverride(t *testing.T) {
+	params, err := turnStartParams("thread-1", "Do the work", "/tmp/project", TurnStartOptions{
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "medium",
+	})
+	if err != nil {
+		t.Fatalf("turnStartParams failed: %v", err)
+	}
+	if got, want := params["model"], "gpt-5.6-sol"; got != want {
+		t.Fatalf("model = %v, want %q", got, want)
+	}
+	if got, want := params["reasoning_effort"], "medium"; got != want {
+		t.Fatalf("reasoning_effort = %v, want %q", got, want)
+	}
+	if _, ok := params["collaborationMode"]; ok {
+		t.Fatalf("ordinary turn unexpectedly has collaborationMode: %#v", params)
+	}
+}
+
 func TestTurnStartParamsIncludesDefaultCollaborationMode(t *testing.T) {
 	params, err := turnStartParams("thread-1", "Run it", "/tmp/project", TurnStartOptions{
 		CollaborationMode: "default",
