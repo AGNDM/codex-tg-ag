@@ -7,7 +7,7 @@ import (
 
 func TestPolicyUsesNativeModelSpecificAgents(t *testing.T) {
 	document := Document()
-	for _, want := range []string{"luna_executor", "gpt-5.6-sol", "astra_advisor", "gpt-6-astra", "two serious attempts", "Critical path"} {
+	for _, want := range []string{"small Azure Linux server", "Codex App Server", "real Codex Project", "luna_executor", "gpt-5.6-sol", "astra_advisor", "gpt-6-astra", "two serious attempts", "Critical path"} {
 		if !strings.Contains(document, want) {
 			t.Fatalf("policy missing %q", want)
 		}

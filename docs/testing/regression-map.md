@@ -190,6 +190,7 @@ Contract notes:
 - Codex native subagent tools own spawn, wait, steering, and result consolidation.
 - The daemon stores a policy id/version, not mutable free-form policy text.
 - `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
+- Lead Policy v2 identifies the small Azure Linux host, Telegram bridge, Codex App Server, real Codex Project binding, durable context sources, and resource-aware concurrency expectations.
 - The persistent lead remains Sol and remains the only operator-facing agent.
 
 ## Full Thread ID Access

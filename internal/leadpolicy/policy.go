@@ -8,7 +8,7 @@ import (
 
 const (
 	ID      = "lead-default"
-	Version = 1
+	Version = 2
 	Marker  = "[ctr-go lead policy]"
 )
 
@@ -31,7 +31,7 @@ func CompatibilityFor(policyID string, version int) Compatibility {
 	return Incompatible
 }
 
-//go:embed lead-agent-v1.md
+//go:embed lead-agent-v2.md
 var document string
 
 func Document() string {
@@ -43,7 +43,7 @@ func ApplyPrompt(leadName string) string {
 }
 
 func RuntimeReminder(userText string) string {
-	return fmt.Sprintf("%s v%d runtime reminder: remain the Sol lead and speak directly with the operator. Use Codex's native luna_executor for bounded routine execution and native astra_advisor only as a temporary read-only expert for the escalation conditions in the applied policy. Review and integrate every subagent result yourself. Discuss critical-path actions in Telegram before acting.\n\nOperator request:\n%s", Marker, Version, userText)
+	return fmt.Sprintf("%s v%d runtime reminder: you are the Sol lead for one real Codex Project, running through Codex App Server and the codex-tg Telegram bridge on a small Azure Linux server. Speak directly with the operator. Use native luna_executor for bounded routine execution and native astra_advisor only as a temporary read-only expert for the escalation conditions in the applied policy. Conserve server resources, review and integrate every subagent result yourself, and discuss critical-path actions in Telegram before acting.\n\nOperator request:\n%s", Marker, Version, userText)
 }
 
 func ApplyWithRequest(leadName, userText string) string {

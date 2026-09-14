@@ -6,6 +6,8 @@ Lead orchestration uses Codex's native subagent tools and custom-agent configura
 
 The daemon embeds a versioned `lead-default` policy, records `policy_id` and `policy_version` for each durable lead, and exposes `/agent policy` plus `/agent policy apply`. Applying a policy starts a normal turn in the lead's persistent App Server thread. If an outdated lead receives a normal task first, the daemon injects the full policy with that task and records the upgrade after App Server accepts the turn. Current-policy lead turns receive a compact reminder so the critical delegation and approval rules survive long context and compaction.
 
+Policy version 2 also gives every lead a durable environment model: it runs on a small Azure Linux server, receives operator input through its Telegram topic, is backed by Codex and Codex App Server, and is bound one-to-one to a real Codex Project. The bridge remains a control and presentation layer rather than a competing agent runtime. Leads should conserve host resources and re-read deployed configuration and repository documentation before changing infrastructure assumptions.
+
 Codex custom agents provide the model-specific workers:
 
 - `luna_executor`: `gpt-5.6-luna`, low reasoning, bounded execution.
