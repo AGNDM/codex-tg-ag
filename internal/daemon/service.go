@@ -2013,6 +2013,12 @@ func (s *Service) turnStartOptionsForRoute(ctx context.Context, chatID, topicID 
 	}
 	options.Model = strings.TrimSpace(agent.Model)
 	options.ReasoningEffort = normalizeReasoningEffort(agent.ReasoningEffort)
+	options.SandboxMode = "workspaceWrite"
+	if root := strings.TrimSpace(thread.CWD); root != "" {
+		options.WritableRoots = []string{root}
+	}
+	options.ApprovalPolicy = "on-request"
+	options.ApprovalsReviewer = "auto_review"
 	return options
 }
 

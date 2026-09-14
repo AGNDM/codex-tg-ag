@@ -13,6 +13,10 @@ type TurnStartOptions struct {
 	CollaborationMode string
 	Model             string
 	ReasoningEffort   string
+	SandboxMode       string
+	WritableRoots     []string
+	ApprovalPolicy    string
+	ApprovalsReviewer string
 }
 
 type ModelOption struct {

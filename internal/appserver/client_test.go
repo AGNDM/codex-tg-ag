@@ -126,8 +126,12 @@ func TestTurnStartParamsIncludesCollaborationMode(t *testing.T) {
 
 func TestTurnStartParamsIncludesOrdinaryTurnModelOverride(t *testing.T) {
 	params, err := turnStartParams("thread-1", "Do the work", "/tmp/project", TurnStartOptions{
-		Model:           "gpt-5.6-sol",
-		ReasoningEffort: "medium",
+		Model:             "gpt-5.6-sol",
+		ReasoningEffort:   "medium",
+		SandboxMode:       "workspaceWrite",
+		WritableRoots:     []string{"/tmp/project"},
+		ApprovalPolicy:    "on-request",
+		ApprovalsReviewer: "auto_review",
 	})
 	if err != nil {
 		t.Fatalf("turnStartParams failed: %v", err)
@@ -140,6 +144,17 @@ func TestTurnStartParamsIncludesOrdinaryTurnModelOverride(t *testing.T) {
 	}
 	if _, ok := params["collaborationMode"]; ok {
 		t.Fatalf("ordinary turn unexpectedly has collaborationMode: %#v", params)
+	}
+	sandbox, ok := params["sandboxPolicy"].(map[string]any)
+	if !ok || sandbox["type"] != "workspaceWrite" || sandbox["networkAccess"] != false {
+		t.Fatalf("sandboxPolicy = %#v, want offline workspaceWrite", params["sandboxPolicy"])
+	}
+	roots, ok := sandbox["writableRoots"].([]string)
+	if !ok || len(roots) != 1 || roots[0] != "/tmp/project" {
+		t.Fatalf("writableRoots = %#v, want project root", sandbox["writableRoots"])
+	}
+	if params["approvalPolicy"] != "on-request" || params["approvalsReviewer"] != "auto_review" {
+		t.Fatalf("approval settings = %#v / %#v", params["approvalPolicy"], params["approvalsReviewer"])
 	}
 }
 

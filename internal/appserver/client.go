@@ -437,6 +437,26 @@ func turnStartParams(threadID, message, cwd string, options TurnStartOptions) (m
 	if strings.TrimSpace(cwd) != "" {
 		params["cwd"] = cwd
 	}
+	if sandboxMode := strings.TrimSpace(options.SandboxMode); sandboxMode != "" {
+		sandboxPolicy := map[string]any{"type": sandboxMode}
+		if sandboxMode == "workspaceWrite" {
+			roots := make([]string, 0, len(options.WritableRoots))
+			for _, root := range options.WritableRoots {
+				if root = strings.TrimSpace(root); root != "" {
+					roots = append(roots, root)
+				}
+			}
+			sandboxPolicy["writableRoots"] = roots
+			sandboxPolicy["networkAccess"] = false
+		}
+		params["sandboxPolicy"] = sandboxPolicy
+	}
+	if approvalPolicy := strings.TrimSpace(options.ApprovalPolicy); approvalPolicy != "" {
+		params["approvalPolicy"] = approvalPolicy
+	}
+	if reviewer := strings.TrimSpace(options.ApprovalsReviewer); reviewer != "" {
+		params["approvalsReviewer"] = reviewer
+	}
 	mode := normalizeCollaborationMode(options.CollaborationMode)
 	if mode == "" {
 		if model := strings.TrimSpace(options.Model); model != "" {
@@ -470,6 +490,9 @@ func (c *Client) resolveTurnStartOptions(ctx context.Context, options TurnStartO
 	options.CollaborationMode = normalizeCollaborationMode(options.CollaborationMode)
 	options.Model = strings.TrimSpace(options.Model)
 	options.ReasoningEffort = normalizeReasoningEffort(options.ReasoningEffort)
+	options.SandboxMode = strings.TrimSpace(options.SandboxMode)
+	options.ApprovalPolicy = strings.TrimSpace(options.ApprovalPolicy)
+	options.ApprovalsReviewer = strings.TrimSpace(options.ApprovalsReviewer)
 	if options.CollaborationMode == "" {
 		return options, nil
 	}

@@ -17,6 +17,7 @@ The operator communicates with Axiom, not directly with worker subagents. Keep t
 - Durable state: SQLite under `/opt/telegram-agent/state/data/`; never commit or casually mutate it.
 - Codex configuration: the service user's `~/.codex/`, including native custom-agent definitions.
 - Host sandbox: Ubuntu AppArmor keeps global unprivileged-user-namespace restrictions enabled and selectively permits bubblewrap through Ubuntu's maintained profile.
+- Lead turns: Codex-native `workspaceWrite` limited to this Project root, using `on-request` approvals routed through `auto_review`; Astra remains read-only.
 
 Treat the live deployed configuration as operational evidence, but do not commit credentials, Telegram tokens, private IDs, database copies, session files, raw logs, or operator-specific secrets.
 

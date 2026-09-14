@@ -17,6 +17,8 @@ The global Codex `[agents]` configuration enables native multi-agent tools, caps
 
 Every Telegram-started lead turn sends the App Server `turn/start` top-level `model` and `reasoning_effort` overrides, including ordinary turns outside collaboration mode. This makes the persisted Sol lead setting effective instead of relying on the thread's previous model.
 
+Lead turns also send Codex-native `sandboxPolicy: workspaceWrite`, restricted to the bound Project root, with `approvalPolicy: on-request` and `approvalsReviewer: auto_review`. This prevents a prior read-only CLI or audit turn from leaving sticky thread permissions that silently block later implementation. Ordinary non-Lead threads keep their existing permissions, and `astra_advisor` remains read-only through its custom-agent definition.
+
 Custom roles are standalone TOML files discovered by Codex under `~/.codex/agents/` (or project-local `.codex/agents/`) using their `name` field. They are not registered in a daemon-owned role table.
 
 ## Consequences
@@ -26,4 +28,5 @@ Custom roles are standalone TOML files discovered by Codex under `~/.codex/agent
 - Project `AGENTS.md` continues to define project-specific work rules. It does not replace the operator-level lead policy.
 - Applying a policy consumes one normal lead turn because the instruction becomes part of the durable thread history.
 - Runtime reminders add a small token cost to Telegram-originated lead messages.
+- Leads can edit their bound Project locally; automatic review may approve low-risk requests, while the Lead Policy still requires explicit operator direction for push, merge, deployment, credentials, permissions, destructive actions, and other critical paths.
 - A daemon rollback refuses to overwrite a newer or foreign policy version.

@@ -4804,16 +4804,22 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
 	}
-	thread := &model.Thread{ID: "lead-thread", PreferredModel: "gpt-5.6-sol"}
+	thread := &model.Thread{ID: "lead-thread", PreferredModel: "gpt-5.6-sol", CWD: "/projects/telegram"}
 
 	leadOptions := service.turnStartOptionsForRoute(ctx, 123456789, 31, "", thread)
 	if leadOptions.Model != "gpt-5.6-sol" || leadOptions.ReasoningEffort != "medium" {
 		t.Fatalf("lead options = %#v, want Sol medium", leadOptions)
 	}
+	if leadOptions.SandboxMode != "workspaceWrite" || len(leadOptions.WritableRoots) != 1 || leadOptions.WritableRoots[0] != "/projects/telegram" || leadOptions.ApprovalPolicy != "on-request" || leadOptions.ApprovalsReviewer != "auto_review" {
+		t.Fatalf("lead permissions = %#v, want workspaceWrite with auto review", leadOptions)
+	}
 
 	ordinaryOptions := service.turnStartOptionsForRoute(ctx, 123456789, 32, "", thread)
 	if ordinaryOptions.Model != "gpt-5.6-luna" || ordinaryOptions.ReasoningEffort != "low" {
 		t.Fatalf("ordinary options = %#v, want global Luna low", ordinaryOptions)
+	}
+	if ordinaryOptions.SandboxMode != "" || ordinaryOptions.ApprovalPolicy != "" || ordinaryOptions.ApprovalsReviewer != "" {
+		t.Fatalf("ordinary permissions unexpectedly overridden: %#v", ordinaryOptions)
 	}
 }
 

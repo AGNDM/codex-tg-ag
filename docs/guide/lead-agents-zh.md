@@ -16,6 +16,8 @@ Axiom 的 Project 已指定为本仓库的长期开发与维护 Project；其接
 
 Lead 通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。Lead 自身保持 Sol；子代理不会直接与你对话。为适应小服务器，通常一次只运行一个子代理，确有独立性和时间收益时才并发两个。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
 
+Lead 的 Telegram turn 默认使用 Codex 原生 `workspaceWrite`，可写范围限定为其绑定的 Project root，并使用 `on-request + auto_review` 处理低风险审批。因此 Lead 和 Luna 可以在 Project 内编辑、运行测试和创建本地 commit；Astra 始终只读。Git push、merge 和部署仍不属于自动许可，必须先向你说明具体动作并获得批准。
+
 ## 日常使用
 
 直接在某个 Agent 的 topic 中发送普通消息即可。Bot 会恢复该 topic 对应的持久 Codex thread，因此上下文不会因为服务重启而丢失。
