@@ -298,6 +298,10 @@ func (s *Service) codexProjects(ctx context.Context) ([]model.CodexProject, erro
 	if err != nil {
 		return nil, err
 	}
+	return codexProjectsFromPayload(payload), nil
+}
+
+func codexProjectsFromPayload(payload map[string]any) []model.CodexProject {
 	items, _ := payload["data"].([]any)
 	projects := make([]model.CodexProject, 0, len(items))
 	for _, raw := range items {
@@ -314,7 +318,27 @@ func (s *Service) codexProjects(ctx context.Context) ([]model.CodexProject, erro
 			projects = append(projects, project)
 		}
 	}
-	return projects, nil
+	return projects
+}
+
+func (s *Service) leadProjectRoot(ctx context.Context, live Session, chatID, topicID int64, threadID string) (string, error) {
+	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+	if err != nil || agent == nil || agent.ThreadID != threadID || strings.TrimSpace(agent.ProjectID) == "" {
+		return "", err
+	}
+	payload, err := live.ProjectList(ctx, 100, "")
+	if err != nil {
+		return "", err
+	}
+	for _, project := range codexProjectsFromPayload(payload) {
+		if project.ID == agent.ProjectID {
+			if len(project.Roots) == 0 {
+				return "", fmt.Errorf("Codex Project %s has no root", project.Name)
+			}
+			return project.Roots[0], nil
+		}
+	}
+	return "", fmt.Errorf("bound Codex Project %s was not found", agent.ProjectID)
 }
 
 func anySlice(value any) []any {

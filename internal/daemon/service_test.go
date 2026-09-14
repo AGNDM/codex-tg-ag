@@ -4701,6 +4701,30 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	}
 }
 
+func TestLeadAgentProjectRootComesFromCodexProject(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
+		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-telegram", Status: "idle", Policy: defaultLeadPolicy,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": "project-telegram", "name": "Telegram", "roots": []any{map[string]any{"path": "/projects/telegram"}}},
+	}}}
+	root, err := service.leadProjectRoot(ctx, stub, 123456789, 31, "lead-thread")
+	if err != nil {
+		t.Fatalf("leadProjectRoot failed: %v", err)
+	}
+	if root != "/projects/telegram" {
+		t.Fatalf("leadProjectRoot = %q, want official Codex root", root)
+	}
+}
+
 func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 	t.Parallel()
 

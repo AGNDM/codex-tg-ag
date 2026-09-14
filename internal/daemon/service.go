@@ -1805,10 +1805,16 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		})
 		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
 	}
+	operationCWD := thread.CWD
+	if projectRoot, projectErr := s.leadProjectRoot(ctx, live, chatID, topicID, threadID); projectErr != nil {
+		return nil, projectErr
+	} else if projectRoot != "" {
+		operationCWD = projectRoot
+	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
-	_, err := live.ThreadResume(requestCtx, threadID, thread.CWD)
+	_, err := live.ThreadResume(requestCtx, threadID, operationCWD)
 	s.logAppServerCall("ThreadResume", started, err, live, lifecycleFields{
 		"thread_id": threadID,
 	})
@@ -1901,7 +1907,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 		options := s.turnStartOptionsForRoute(ctx, chatID, topicID, effectiveCollaborationMode, thread)
 		started = time.Now()
-		result, err = live.TurnStart(requestCtx, threadID, text, thread.CWD, options)
+		result, err = live.TurnStart(requestCtx, threadID, text, operationCWD, options)
 		s.logAppServerCall("TurnStart", started, err, live, lifecycleFields{
 			"thread_id":           threadID,
 			"returned_turn_id":    appserverThreadTurnID(result),
