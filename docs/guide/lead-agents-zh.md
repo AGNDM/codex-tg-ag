@@ -6,9 +6,9 @@
 
 | Agent | 默认模型 | 默认推理强度 | 默认项目 | 当前职责由谁决定 |
 |---|---|---|---|---|
-| Axiom | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Axiom topic 中布置 |
-| Gnome | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Gnome topic 中布置 |
-| Dreamer | `gpt-5.6-sol` | `medium` | 尚未绑定 Codex Project | 你在 Dreamer topic 中布置 |
+| Axiom | `gpt-5.6-sol` | `medium` | Axiom Codex Project | 你在 Axiom topic 中布置 |
+| Gnome | `gpt-5.6-sol` | `medium` | Gnome Codex Project | 你在 Gnome topic 中布置 |
+| Dreamer | `gpt-5.6-sol` | `medium` | Dreamer Codex Project | 你在 Dreamer topic 中布置 |
 
 默认政策 `lead-default v1`：大 Agent 负责与你讨论、规划、复核和汇报。它通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。Lead 自身保持 Sol；子代理不会直接与你对话。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
 
@@ -63,14 +63,16 @@
 
 名称最长 40 个字符，不能与现有 Agent 重复。topic 名和 Agent 名可以不同，但保持一致更容易识别。
 
-登记当前负责的项目：
+查看或切换当前 Lead 负责的真实 Codex Project：
 
 ```text
 /agent project
 /agent project Codex项目名称或ID
 ```
 
-这会更新控制面中的项目标签，不会自动移动 Git 仓库或改变文件路径。
+这里的项目来自 Codex App Server 的 Project 列表，不是 Bot 自造的标签。绑定时，Bot 会调用 Codex 的 `thread/project/update`，让现有主 thread 进入目标 Project，同时保留该 thread 的历史上下文；之后新 turn 使用该 Project 的首个 root。一个 Codex Project 同时只能绑定一个 Lead。
+
+切换 Project 不会复制、移动或删除仓库文件。它改变的是主 thread 的 Codex Project 归属和后续工作目录，因此切换前应先让当前 turn 完成，并确认目标 Project 正确。
 
 切换当前 Lead 的模型：
 
@@ -196,3 +198,4 @@ Codex 提出文字问题时，直接回复对应的 `[Plan]` 或请求卡片即�
 - App Server 未就绪：先 `/status`，再 `/repair`。
 - Agent 长时间显示 `working`：用 `/context` 和 `/status` 查看；必要时 `/stop`。
 - 服务重启不会删除 Agent、topic 或 thread 映射，它们保存在 Azure 的 SQLite 数据库中。
+- 原生子代理验证不要使用 `codex exec --ephemeral`；当前 Codex 版本的 ephemeral thread 不会进入协作路由。Bot 的 Lead thread 和正常持久 Codex 会话不受这个限制。
