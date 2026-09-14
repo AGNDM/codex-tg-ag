@@ -173,26 +173,28 @@ Contract notes:
 
 ## Durable Lead Policy
 
-ADR: `docs/adr/ADR-020-native-lead-policy.md`; feature brief is
+ADRs: `docs/adr/ADR-020-native-lead-policy.md` and
+`docs/adr/ADR-021-model-neutral-leads.md`; feature brief is
 `docs/process/big-agent-registry-brief.md`.
 
 Primary tests:
 
-- `internal/leadpolicy/policy_test.go::TestPolicyUsesNativeModelSpecificAgents`
+- `internal/leadpolicy/policy_test.go::TestPolicyUsesNativeAgentsWithModelNeutralLead`
 - `internal/appserver/client_test.go::TestTurnStartParamsIncludesOrdinaryTurnModelOverride`
 - `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
 - `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
 - `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`
 - `internal/daemon/service_test.go::TestCurrentLeadPolicyAddsRuntimeReminder`
+- `internal/daemon/service_test.go::TestLeadAgentModelAndLifecycleStatus`
 
 Contract notes:
 
 - Codex native subagent tools own spawn, wait, steering, and result consolidation.
 - The daemon stores a policy id/version, not mutable free-form policy text.
 - `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
-- Lead Policy v2 identifies the small Azure Linux host, Telegram bridge, Codex App Server, real Codex Project binding, durable context sources, and resource-aware concurrency expectations.
+- Lead Policy v3 identifies the environment and durable context, keeps Sol medium as the creation default, and permits any model currently advertised by App Server.
 - Telegram-started Lead turns explicitly restore Codex `workspaceWrite` for the bound Project root with `on-request` plus `auto_review`, so a sticky read-only audit turn cannot block later edits; ordinary threads are not broadened.
-- The persistent lead remains Sol and remains the only operator-facing agent.
+- The persistent lead remains the only operator-facing agent; its configured model may be changed without changing Lead identity.
 
 ## Full Thread ID Access
 

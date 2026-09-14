@@ -35,6 +35,12 @@ This file now serves two purposes:
 - `/stop [thread]`
 - `/approve <request_id>`
 - `/deny <request_id>`
+- `/agents`
+- `/agent create <name>`
+- `/agent show`
+- `/agent project [project]`
+- `/agent model <model-id|sol|luna|astra> [effort]`
+- `/agent policy [apply]`
 
 ## Aliases and adjacent commands
 
@@ -117,6 +123,16 @@ Local HTTP adapter:
 - `GET /v1/threads?limit=&cursor=` delegates to App Server `thread/list` through the control layer.
 - `GET /v1/threads/{thread_id}?include_turns=true|false` delegates to App Server `thread/read`.
 - State-changing HTTP operations are out of scope for the first router-agent API slice.
+
+## Lead Agent Contract
+
+- A Telegram topic may own one persistent Lead backed by one Codex thread and one real Codex Project.
+- New Leads default to `gpt-5.6-sol` with `medium` reasoning.
+- `/agent model` accepts any non-hidden model currently returned by App Server `model/list`; `sol`, `luna`, and `astra` are convenience aliases.
+- Omitting reasoning effort uses the selected model's advertised default. An explicit effort must be supported by that model when supported values are advertised.
+- Model changes apply to new turns without changing the Lead's topic, thread, Project, history, policy, or authority.
+- Native custom-agent names are delegation roles, not Lead model IDs.
+- Lead Policy v3 is model-neutral and preserves native delegation, review, and critical-path approval requirements.
 
 ## Telegram Adapter Contract
 

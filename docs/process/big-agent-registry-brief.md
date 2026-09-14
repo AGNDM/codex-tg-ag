@@ -2,17 +2,17 @@
 
 ## Problem
 
-An operator can bind Telegram chats and topics to Codex threads, but cannot manage a small roster of durable, named lead agents. The operator wants to talk only to Sol-class leads; each lead should retain its own thread, responsibilities, project context, and task queue while delegating routine work to Luna internally.
+An operator can bind Telegram chats and topics to Codex threads, but cannot manage a small roster of durable, named lead agents. Each lead should retain its own thread, responsibilities, project context, and task queue while delegating bounded work internally.
 
 ## Goal
 
-Add a durable agent registry that binds a named lead agent to a Telegram topic and Codex thread, records its current project and policy, and makes that identity visible in Telegram. Leads use `gpt-5.6-sol` or stronger. Subagent activity remains an internal implementation detail unless the lead reports it.
+Add a durable agent registry that binds a named lead agent to a Telegram topic and Codex thread, records its current project and policy, and makes that identity visible in Telegram. New Leads default to `gpt-5.6-sol` with `medium` reasoning; the operator may select any model currently available from Codex. Subagent activity remains an internal implementation detail unless the lead reports it.
 
 ## Non-goals
 
 - Replacing Codex App Server as runtime authority.
 - Building a second agent harness or model loop.
-- Direct operator-to-Luna conversations.
+- Direct operator routing to delegated custom-agent threads.
 - Automatic Git merge, push, deployment, spending, or destructive production changes.
 - Supporting multiple human operators in the first slice.
 
@@ -23,9 +23,10 @@ The operator opens a private Telegram forum topic for a lead, creates or binds t
 Initial command surface:
 
 - `/agents` lists durable leads and their project/thread state.
-- `/agent create <name>` creates a Sol lead for the current topic.
+- `/agent create <name>` creates a Sol medium Lead for the current topic.
 - `/agent show` shows the lead bound to the current topic.
 - `/agent project <project>` changes the lead's current registered Codex Project.
+- `/agent model <model-id|sol|luna|astra> [effort]` selects any model advertised by App Server for future Lead turns.
 - `/agent policy` reports the embedded policy and applied version.
 - `/agent policy apply` injects the current policy into the persistent lead thread.
 
@@ -49,7 +50,7 @@ Add `internal/agents` as a cohesive registry service backed by `internal/storage
 
 ## Acceptance Criteria
 
-- [ ] Three named Sol-class lead agents can coexist with independent topic, thread, and project state.
+- [ ] Three named lead agents can coexist with independent topic, thread, project, and model state.
 - [ ] Restarting the daemon preserves all lead bindings.
 - [ ] Normal messages resume the lead's durable Codex thread.
 - [ ] Luna delegation is never exposed as a direct operator routing target.

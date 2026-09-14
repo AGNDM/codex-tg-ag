@@ -15,6 +15,7 @@ const (
 	defaultLeadModel     = "gpt-5.6-sol"
 	defaultLeadReasoning = "medium"
 	defaultLeadStatus    = "initializing"
+	leadModelUsage       = "Usage: /agent model <model-id|sol|luna|astra> [effort]"
 )
 
 func (s *Service) leadAgentsOverview(ctx context.Context) (*DirectResponse, error) {
@@ -93,7 +94,7 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 	}
 	if action == "model" {
 		if len(parts) != 2 {
-			return &DirectResponse{Text: "Usage: /agent model sol|astra [effort]"}, nil
+			return &DirectResponse{Text: leadModelUsage}, nil
 		}
 		return s.updateLeadAgentModel(ctx, chatID, topicID, parts[1])
 	}
@@ -114,7 +115,7 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 		return s.applyLeadPolicy(ctx, chatID, topicID, *agent)
 	}
 	if action != "show" || len(parts) != 1 {
-		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project [project] | /agent model sol|astra [effort] | /agent policy [apply]"}, nil
+		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project [project] | /agent model <model-id> [effort] | /agent policy [apply]"}, nil
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
@@ -130,24 +131,16 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int64, args string) (*DirectResponse, error) {
 	fields := strings.Fields(args)
 	if len(fields) < 1 || len(fields) > 2 {
-		return &DirectResponse{Text: "Usage: /agent model sol|astra [effort]"}, nil
+		return &DirectResponse{Text: leadModelUsage}, nil
 	}
-	modelID := ""
-	defaultEffort := ""
+	modelID := strings.TrimSpace(fields[0])
 	switch strings.ToLower(fields[0]) {
 	case "sol", "gpt-5.6-sol":
-		modelID, defaultEffort = "gpt-5.6-sol", "medium"
+		modelID = "gpt-5.6-sol"
+	case "luna", "gpt-5.6-luna":
+		modelID = "gpt-5.6-luna"
 	case "astra", "gpt-6-astra":
-		modelID, defaultEffort = "gpt-6-astra", "low"
-	default:
-		return &DirectResponse{Text: "Lead agents must use Sol or Astra. Usage: /agent model sol|astra [effort]"}, nil
-	}
-	effort := defaultEffort
-	if len(fields) == 2 {
-		effort = normalizeReasoningEffort(fields[1])
-		if !validLeadReasoningEffort(effort) {
-			return &DirectResponse{Text: "Effort must be low, medium, high, xhigh, max, or ultra."}, nil
-		}
+		modelID = "gpt-6-astra"
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
@@ -156,6 +149,21 @@ func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int6
 	if agent == nil {
 		return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
 	}
+	models, err := s.codexModels(ctx)
+	if err != nil {
+		return &DirectResponse{Text: fmt.Sprintf("Could not validate Codex model: %v", err)}, nil
+	}
+	selected, ok := selectedModelOption(models, modelID)
+	if !ok {
+		return &DirectResponse{Text: fmt.Sprintf("Codex model %s is not available. Use /model to inspect the current model catalog.", modelID)}, nil
+	}
+	effort := normalizeReasoningEffort(selected.DefaultReasoningEffort)
+	if len(fields) == 2 {
+		effort = normalizeReasoningEffort(fields[1])
+		if effort == "" || (len(selected.SupportedReasoningEffort) > 0 && !containsString(selected.SupportedReasoningEffort, effort)) || (len(selected.SupportedReasoningEffort) == 0 && !validLeadReasoningEffort(effort)) {
+			return &DirectResponse{Text: fmt.Sprintf("Reasoning effort %s is not supported by %s. Use /effort to inspect available values.", fields[1], modelID)}, nil
+		}
+	}
 	if err := s.store.UpdateLeadAgentModel(ctx, agent.ID, modelID, effort); err != nil {
 		return nil, err
 	}
@@ -163,12 +171,13 @@ func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int6
 		thread.PreferredModel = modelID
 		_ = s.store.UpsertThread(ctx, *thread)
 	}
-	return &DirectResponse{Text: fmt.Sprintf("%s will use %s with %s reasoning on new turns.", agent.Name, modelID, effort), ThreadID: agent.ThreadID}, nil
+	reasoningLabel := firstNonEmpty(effort, "automatic")
+	return &DirectResponse{Text: fmt.Sprintf("%s will use %s with %s reasoning on new turns.", agent.Name, modelID, reasoningLabel), ThreadID: agent.ThreadID}, nil
 }
 
 func validLeadReasoningEffort(effort string) bool {
 	switch effort {
-	case "low", "medium", "high", "xhigh", "max", "ultra":
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 		return true
 	default:
 		return false

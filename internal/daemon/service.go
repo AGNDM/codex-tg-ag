@@ -1304,7 +1304,7 @@ func (s *Service) handleCommand(ctx context.Context, chatID, topicID int64, raw 
 	case "/start":
 		return &DirectResponse{Text: "ctr-go is online.\nUse /status, /threads, /projects, /context, or /observe all."}, nil
 	case "/help":
-		return &DirectResponse{Text: "Commands:\n/start\n/help\n/agents\n/agent create <name>\n/agent show\n/agent project\n/agent project <codex-project-name-or-id>\n/agent model sol|astra [effort]\n/agent policy\n/agent policy apply\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
+		return &DirectResponse{Text: "Commands:\n/start\n/help\n/agents\n/agent create <name>\n/agent show\n/agent project\n/agent project <codex-project-name-or-id>\n/agent model <model-id|sol|luna|astra> [effort]\n/agent policy\n/agent policy apply\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
 	case "/agents":
 		return s.leadAgentsOverview(ctx)
 	case "/agent":
@@ -1490,6 +1490,9 @@ func (s *Service) codexModelMenu(ctx context.Context) (*DirectResponse, error) {
 		{s.callbackButton(ctx, selectedButtonLabel("Auto", current == ""), "settings_model_set", "settings", "", "", map[string]any{"value": ""})},
 	}
 	for _, option := range models {
+		if option.Hidden {
+			continue
+		}
 		label := option.ID
 		if label == "" {
 			continue
@@ -1628,8 +1631,11 @@ func (s *Service) settingsClient() Session {
 func selectedModelOption(models []appserver.ModelOption, value string) (appserver.ModelOption, bool) {
 	value = strings.TrimSpace(value)
 	var first appserver.ModelOption
-	for index, option := range models {
-		if index == 0 {
+	for _, option := range models {
+		if option.Hidden {
+			continue
+		}
+		if first.ID == "" {
 			first = option
 		}
 		if value != "" && option.ID == value {

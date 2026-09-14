@@ -1,5 +1,7 @@
 # ADR-020: Native Codex Lead Policy
 
+- Status: accepted; Lead model restriction superseded by ADR-021
+
 ## Decision
 
 Lead orchestration uses Codex's native subagent tools and custom-agent configuration. The Telegram daemon does not implement a second scheduler or model loop.
@@ -13,9 +15,9 @@ Codex custom agents provide the model-specific workers:
 - `luna_executor`: `gpt-5.6-luna`, low reasoning, bounded execution.
 - `astra_advisor`: `gpt-6-astra`, low reasoning, read-only expert advice.
 
-The global Codex `[agents]` configuration enables native multi-agent tools, caps concurrent subagents at two, and defaults unspecified subagents to Luna low. The Sol lead remains the operator-facing agent and reviews all subagent results.
+The global Codex `[agents]` configuration enables native multi-agent tools, caps concurrent subagents at two, and defaults unspecified subagents to Luna low. The operator-facing lead reviews all subagent results. ADR-021 allows the operator to choose any model currently available from Codex while keeping Sol medium as the creation default.
 
-Every Telegram-started lead turn sends the App Server `turn/start` top-level `model` and `reasoning_effort` overrides, including ordinary turns outside collaboration mode. This makes the persisted Sol lead setting effective instead of relying on the thread's previous model.
+Every Telegram-started lead turn sends the App Server `turn/start` top-level `model` and `reasoning_effort` overrides, including ordinary turns outside collaboration mode. This makes the persisted lead setting effective instead of relying on the thread's previous model.
 
 Lead turns also send Codex-native `sandboxPolicy: workspaceWrite`, restricted to the bound Project root, with `approvalPolicy: on-request` and `approvalsReviewer: auto_review`. This prevents a prior read-only CLI or audit turn from leaving sticky thread permissions that silently block later implementation. Ordinary non-Lead threads keep their existing permissions, and `astra_advisor` remains read-only through its custom-agent definition.
 
