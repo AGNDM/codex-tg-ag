@@ -73,21 +73,16 @@ boundary:
 
 ## TDD sequence
 
-1. Add a failing service test with a stored active Telegram-origin turn and an
-   empty/partial `interrupted` read. Cover ordinary, reply, and armed input; expect
-   zero steer, zero start, and an explicit not-submitted response during grace.
-2. Add expiry integration tests for top-level active/idle metadata and present or
-   missing old `ActiveTurnID`. Refresh twice through terminal logging; expect a
-   fixed deadline, terminal status, and no restored old active identity. The next
-   input starts exactly one new turn without steering the old one.
-3. Add a sequence test for `interrupted -> incomplete read -> interrupted`; the
-   incomplete read must not erase or extend the original deadline, including
-   after a service restart using the same SQLite state.
-4. Prove `interrupted -> same-turn inProgress` recovery without tool output can
-   steer normally. Preserve waiting, completed, explicit-stop, non-Telegram,
-   active-but-not-steerable, and no-active-steer fallback behavior.
-5. Run targeted daemon tests, `go test ./...`, `go build -buildvcs=false ./...`,
-   formatting, diff checks, and a scoped secret scan. Use fresh-context review.
+1. A service test expects zero steer, zero start, and an explicit not-submitted
+   response when input arrives during the interrupted grace window.
+2. A gate test expects `interrupted -> inconclusive read -> interrupted` to retain
+   the original deadline.
+3. An expiry service test refreshes twice through terminal logging, expects the
+   stale active identity to remain cleared, then starts one new turn without
+   steering the old one.
+
+Existing tests continue to cover active recovery, waiting, explicit stop,
+active-but-not-steerable, and no-active-steer fallback behavior.
 
 ## Live validation
 
@@ -103,7 +98,7 @@ record that exact live-QA blocker.
 
 - [ ] Deferred interrupted UI state never grants `TurnSteer` eligibility.
 - [ ] The first interrupted deadline cannot be extended by polling, input,
-      diagnostics, incomplete reads, or service restart.
+      diagnostics, or an inconclusive read.
 - [ ] Expiry clears only the matching stale active turn and remains terminal across
       repeated refreshes.
 - [ ] Explicit same-turn active/waiting evidence within the window restores normal

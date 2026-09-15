@@ -304,6 +304,33 @@ func TestTelegramEmptyInterruptedGateGraceExpiryAccepts(t *testing.T) {
 	}
 }
 
+func TestTelegramInterruptedGateKeepsDeadlineAcrossInconclusiveRead(t *testing.T) {
+	t.Parallel()
+
+	service := newTerminalGateTestService(t)
+	service.cfg.ObserverPollInterval = time.Second
+	ctx := context.Background()
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	if err := service.markTelegramOriginTurn(ctx, "thread-inconclusive", "turn-inconclusive"); err != nil {
+		t.Fatalf("markTelegramOriginTurn failed: %v", err)
+	}
+	interrupted := terminalGateTestSnapshot("thread-inconclusive", "turn-inconclusive", "interrupted")
+	first, err := service.decideTelegramOriginEmptyInterruptedTerminal(ctx, &interrupted, now)
+	if err != nil || first.Action != terminalGateDefer {
+		t.Fatalf("initial decision = %#v err=%v, want defer", first, err)
+	}
+	inconclusive := terminalGateTestSnapshot("thread-inconclusive", "turn-inconclusive", "")
+	inconclusive.Thread.Status = "active"
+	middle, err := service.decideTelegramOriginEmptyInterruptedTerminal(ctx, &inconclusive, now.Add(30*time.Second))
+	if err != nil || middle.Action != terminalGateDefer || !middle.ExpiresAt.Equal(first.ExpiresAt) {
+		t.Fatalf("inconclusive decision = %#v err=%v, want defer with original deadline %s", middle, err, first.ExpiresAt)
+	}
+	last, err := service.decideTelegramOriginEmptyInterruptedTerminal(ctx, &interrupted, now.Add(60*time.Second))
+	if err != nil || last.Action != terminalGateDefer || !last.ExpiresAt.Equal(first.ExpiresAt) {
+		t.Fatalf("repeated interrupted decision = %#v err=%v, want original deadline %s", last, err, first.ExpiresAt)
+	}
+}
+
 func terminalGateTestSnapshot(threadID, turnID, status string) appserver.ThreadReadSnapshot {
 	return appserver.ThreadReadSnapshot{
 		Thread: model.Thread{
