@@ -348,6 +348,7 @@ func (s *Service) applyTelegramOriginTerminalGate(ctx context.Context, operation
 		s.logLifecycle("telegram_origin_terminal_recovered", fields)
 	case terminalGateAccept:
 		if decision.DeferrableInterrupted && decision.Reason == "grace_expired" {
+			normalizeAcceptedInterruptedThread(current)
 			fields := snapshotDiagnosticFields(*current)
 			fields["operation"] = operation
 			fields["reason"] = decision.Reason
@@ -357,6 +358,37 @@ func (s *Service) applyTelegramOriginTerminalGate(ctx context.Context, operation
 		}
 	}
 	return false
+}
+
+func normalizeAcceptedInterruptedThread(snapshot *appserver.ThreadReadSnapshot) {
+	if snapshot == nil || !strings.EqualFold(strings.TrimSpace(snapshot.LatestTurnStatus), "interrupted") {
+		return
+	}
+	latestTurnID := strings.TrimSpace(snapshot.LatestTurnID)
+	activeTurnID := strings.TrimSpace(snapshot.Thread.ActiveTurnID)
+	if latestTurnID == "" || (activeTurnID != "" && activeTurnID != latestTurnID) {
+		return
+	}
+	snapshot.Thread.ActiveTurnID = ""
+	snapshot.Thread.Status = "interrupted"
+}
+
+func (s *Service) interruptedTurnInputDecision(ctx context.Context, threadID, turnID string, now time.Time) (terminalGateDecisionKind, time.Time, bool) {
+	state, ok, err := s.loadTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID, now)
+	if err != nil || !ok {
+		return "", time.Time{}, false
+	}
+	expiresAt := parseTime(state.ExpiresAt)
+	if state.LastDecision == string(terminalGateAccept) && state.LastReason == "grace_expired" {
+		return terminalGateAccept, expiresAt, true
+	}
+	if !expiresAt.IsZero() && !now.Before(expiresAt) {
+		return terminalGateAccept, expiresAt, true
+	}
+	if state.LastDecision == string(terminalGateDefer) {
+		return terminalGateDefer, expiresAt, true
+	}
+	return "", expiresAt, false
 }
 
 func (s *Service) threadHasDeferredEmptyInterrupted(ctx context.Context, thread model.Thread, snapshot *model.ThreadSnapshotState) bool {

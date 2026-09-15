@@ -1854,6 +1854,55 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	var result map[string]any
 	var steerErr error
 	steerState, _ := s.resolveArmedSteer(ctx, chatID, topicID)
+	now := time.Now().UTC()
+	type inputTarget struct {
+		turnID string
+		route  string
+	}
+	targets := []inputTarget{
+		{turnID: routeTurnID, route: "reply"},
+		{turnID: thread.ActiveTurnID, route: "active_turn"},
+	}
+	if steerState != nil && steerState.ThreadID == threadID {
+		targets = append([]inputTarget{{turnID: steerState.TurnID, route: "armed"}}, targets...)
+	}
+	for _, target := range targets {
+		turnID := strings.TrimSpace(target.turnID)
+		if turnID == "" {
+			continue
+		}
+		decision, expiresAt, ok := s.interruptedTurnInputDecision(ctx, threadID, turnID, now)
+		if !ok {
+			continue
+		}
+		if decision == terminalGateDefer {
+			s.logLifecycle("telegram_turn_input_rejected", lifecycleFields{
+				"thread_id":   threadID,
+				"turn_id":     turnID,
+				"route":       target.route,
+				"reason":      "interrupted_state_pending",
+				"defer_until": expiresAt,
+			})
+			return &DirectResponse{
+				Text:     fmt.Sprintf("Codex is confirming that turn %s was interrupted. Your message was not submitted; retry shortly.", turnID),
+				ThreadID: threadID,
+				TurnID:   turnID,
+			}, nil
+		}
+		if decision == terminalGateAccept {
+			if steerState != nil && steerState.ThreadID == threadID && steerState.TurnID == turnID {
+				_ = s.store.ClearSteerState(ctx, chatID, topicID)
+				steerState = nil
+			}
+			if routeTurnID == turnID {
+				routeTurnID = ""
+			}
+			if thread.ActiveTurnID == turnID {
+				thread.ActiveTurnID = ""
+				thread.Status = "interrupted"
+			}
+		}
+	}
 	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, steerState.TurnID, text)
