@@ -2490,6 +2490,111 @@ func TestRefreshThreadForOperationDefersEmptyInterrupted(t *testing.T) {
 	}
 }
 
+func TestInputDuringInterruptedGraceIsNotSubmitted(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	service.cfg.ObserverPollInterval = time.Second
+	ctx := context.Background()
+	turnID := "turn-interrupted-grace"
+	thread := model.Thread{
+		ID:           "thread-interrupted-grace",
+		Title:        "Interrupted grace",
+		ProjectName:  "Codex",
+		CWD:          "/Users/example/project",
+		UpdatedAt:    time.Now().UTC().Unix(),
+		Status:       "active",
+		ActiveTurnID: turnID,
+	}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.markTelegramOriginTurn(ctx, thread.ID, turnID); err != nil {
+		t.Fatalf("markTelegramOriginTurn failed: %v", err)
+	}
+	stub := &stubSession{
+		threadReads: map[string]map[string]any{
+			thread.ID: diagnosticThreadReadPayload(thread, turnID, "interrupted"),
+		},
+	}
+	service.live = stub
+	service.liveConnected = true
+
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "do not submit this yet")
+	if err != nil {
+		t.Fatalf("sendInputToThread failed: %v", err)
+	}
+	if response == nil || !strings.Contains(response.Text, "not submitted") {
+		t.Fatalf("response = %#v, want interrupted-state not-submitted message", response)
+	}
+	if len(stub.turnSteerCalls) != 0 || len(stub.turnStartCalls) != 0 {
+		t.Fatalf("turn calls during interrupted grace: steer=%#v start=%#v, want none", stub.turnSteerCalls, stub.turnStartCalls)
+	}
+}
+
+func TestExpiredInterruptedGraceClearsActiveTurnWithoutRearming(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	service.cfg.ObserverPollInterval = time.Second
+	ctx := context.Background()
+	turnID := "turn-interrupted-expired"
+	thread := model.Thread{
+		ID:           "thread-interrupted-expired",
+		Title:        "Interrupted expired",
+		ProjectName:  "Codex",
+		CWD:          "/Users/example/project",
+		UpdatedAt:    time.Now().UTC().Unix(),
+		Status:       "active",
+		ActiveTurnID: turnID,
+	}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.markTelegramOriginTurn(ctx, thread.ID, turnID); err != nil {
+		t.Fatalf("markTelegramOriginTurn failed: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := service.saveTelegramOriginEmptyInterruptedDefer(ctx, thread.ID, turnID, terminalGateState{
+		ThreadID:     thread.ID,
+		TurnID:       turnID,
+		FirstSeenAt:  model.TimeString(now.Add(-2 * time.Minute).Format(time.RFC3339Nano)),
+		ExpiresAt:    model.TimeString(now.Add(-time.Minute).Format(time.RFC3339Nano)),
+		LastDecision: string(terminalGateDefer),
+		LastReason:   "empty_interrupted",
+	}); err != nil {
+		t.Fatalf("save terminal gate state failed: %v", err)
+	}
+	stub := &stubSession{
+		threadReads: map[string]map[string]any{
+			thread.ID: diagnosticThreadReadPayload(thread, turnID, "interrupted"),
+		},
+	}
+
+	for range 2 {
+		refreshed, err := service.refreshThreadForOperation(ctx, stub, thread.ID, "thread_read")
+		if err != nil {
+			t.Fatalf("refreshThreadForOperation failed: %v", err)
+		}
+		if refreshed == nil || refreshed.Status != "interrupted" || refreshed.ActiveTurnID != "" {
+			t.Fatalf("refreshed thread = %#v, want terminal interrupted without active turn", refreshed)
+		}
+	}
+	state := loadTerminalGateState(t, service, ctx, terminalGateDeferKey(thread.ID, turnID))
+	if state.LastDecision != string(terminalGateAccept) || state.LastReason != "grace_expired" {
+		t.Fatalf("terminal gate state = %#v, want persistent accepted expiry", state)
+	}
+	service.live = stub
+	service.liveConnected = true
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "start after interruption")
+	if err != nil {
+		t.Fatalf("sendInputToThread failed: %v", err)
+	}
+	if response == nil || response.TurnID != "started-turn" || len(stub.turnSteerCalls) != 0 || len(stub.turnStartCalls) != 1 {
+		t.Fatalf("response/calls = %#v steer=%#v start=%#v, want one new turn without steer", response, stub.turnSteerCalls, stub.turnStartCalls)
+	}
+}
+
 func TestRefreshThreadForOperationTerminalCompletedToolReplacesLiveCurrent(t *testing.T) {
 	t.Parallel()
 

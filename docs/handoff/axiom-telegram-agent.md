@@ -77,3 +77,27 @@ Begin with a read-only takeover audit. Confirm the branch and baseline, inspect 
 7. decisions required from the operator.
 
 Do not modify code, push, deploy, or change server configuration during the takeover audit.
+
+## Prioritized next-stage backlog
+
+### P0: interrupted turn must not remain steerable indefinitely
+
+Implementation destination: `docs/process/interrupted-turn-routing-bug-brief.md`.
+
+The first TDD bugfix after takeover is the lifecycle case where App Server reports a
+Telegram-origin turn as `interrupted` without tool output or another meaningful
+active signal. The bridge may retain the old turn as active across refreshes and
+continue routing later operator messages through `turn/steer`. It must not restore
+that turn to active indefinitely or keep accepting steering after the bounded
+ADR-012 recovery window has expired.
+
+The first failing test should reproduce the full input path: persist an active
+Telegram-origin turn, return an empty `interrupted` snapshot for the same turn,
+advance beyond the recovery window, and send another operator message. Assert that
+the old turn is no longer treated as steerable and that repeated refreshes cannot
+re-arm it. Preserve ADR-012's short recovery window for genuinely transient
+`interrupted` snapshots. Start in `internal/daemon/service_test.go`, then make the
+smallest lifecycle fix around `refreshThreadForOperation`, `mergeThreadMetadata`,
+the terminal gate, or input routing as the failing evidence requires. Update
+`docs/testing/regression-map.md`, ADR-012, and live Telegram validation notes when
+the behavior is fixed.

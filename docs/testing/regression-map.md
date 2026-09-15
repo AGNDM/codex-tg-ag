@@ -320,6 +320,8 @@ Primary tests:
 - `internal/daemon/service_test.go::TestTelegramOriginHotPollCapturesRunningTool`
 - `internal/daemon/service_test.go::TestLiveToolNotificationIgnoresOlderTurnAfterNewerCompletion`
 - `internal/daemon/service_test.go::TestRefreshThreadForOperationDefersEmptyInterrupted`
+- `internal/daemon/service_test.go::TestInputDuringInterruptedGraceIsNotSubmitted`
+- `internal/daemon/service_test.go::TestExpiredInterruptedGraceClearsActiveTurnWithoutRearming`
 
 Live E2E:
 
@@ -331,6 +333,8 @@ Live E2E:
 Contract notes:
 
 - Implicit Telegram-origin `interrupted` is ambiguous until it recovers, expires, or follows explicit `/stop`.
+- Deferred `interrupted` preserves the live UI but does not permit `turn/steer`; the operator receives an explicit not-submitted response.
+- Expiry clears the matching stale active-turn identity and remains accepted across repeated refreshes and terminal logging.
 - Deferred terminal state must not collapse the live panel into a false Final Card.
 - The daemon must keep polling deferred turns hot.
 - Telegram-origin turns get a short App Server `thread/read` hot-poll window after start so `[Tool]` can become visible even when live events do not expose the running command.
