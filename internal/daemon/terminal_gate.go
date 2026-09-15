@@ -223,6 +223,32 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 	}
 	if !deferrableInterrupted {
 		if hasExisting {
+			if !interruptedSnapshotHasExplicitLifecycleEvidence(snapshot) {
+				firstSeenAt := parseTime(existing.FirstSeenAt)
+				expiresAt := parseTime(existing.ExpiresAt)
+				decision.FirstSeenAt = firstSeenAt
+				decision.LastSeenAt = now
+				decision.ExpiresAt = expiresAt
+				existing.LastSeenAt = model.TimeString(now.Format(time.RFC3339Nano))
+				if !expiresAt.IsZero() && !now.Before(expiresAt) {
+					decision.Action = terminalGateAccept
+					decision.Reason = "grace_expired"
+					existing.LastDecision = string(terminalGateAccept)
+					existing.LastReason = decision.Reason
+				} else {
+					decision.Action = terminalGateDefer
+					decision.Reason = "inconclusive_snapshot"
+					decision.HotPoll = true
+					decision.NextPollAfter = terminalGateNextPollAfter(now, s.cfg.ObserverPollInterval)
+					existing.NextPollAfter = decision.NextPollAfter
+					existing.LastDecision = string(terminalGateDefer)
+					existing.LastReason = decision.Reason
+				}
+				if err := s.saveTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID, existing); err != nil {
+					return decision, err
+				}
+				return decision, nil
+			}
 			_ = s.clearTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID)
 			decision.Action = terminalGateRecover
 			decision.Reason = "snapshot_recovered"
@@ -302,6 +328,23 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 		return decision, err
 	}
 	return decision, nil
+}
+
+func interruptedSnapshotHasExplicitLifecycleEvidence(snapshot *appserver.ThreadReadSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply || snapshotHasFinalSignal(snapshot) {
+		return true
+	}
+	status := strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus))
+	if isTerminalStatus(status) {
+		return true
+	}
+	return status == "inprogress" ||
+		strings.Contains(status, "active") ||
+		strings.Contains(status, "waiting") ||
+		strings.Contains(status, "running")
 }
 
 func applyTerminalGateHotPolling(snapshot *model.ThreadSnapshotState, decision terminalGateDecision) {
