@@ -414,3 +414,32 @@ func TestClientSendDocumentSilentSetsDisableNotification(t *testing.T) {
 		t.Fatalf("SendDocument failed: %v", err)
 	}
 }
+
+func TestClientDownloadFileRejectsBodyOverMax(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/file/bottoken/docs/a/b.bin" { t.Fatalf("path = %q", r.URL.Path) }
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+	client := NewClient("token")
+	client.baseURL = server.URL + "/bot" + "token"
+	if _, err := client.DownloadFile(context.Background(), "docs/a/b.bin", 4); err == nil {
+		t.Fatal("DownloadFile accepted body larger than max")
+	}
+}
+
+func TestMessageDecodesDocumentCaptionAndReplyDocument(t *testing.T) {
+	var message Message
+	if err := json.Unmarshal([]byte(`{"message_id":2,"caption":"inspect","document":{"file_id":"f1","file_name":"a.txt","file_size":3},"reply_to_message":{"message_id":1,"document":{"file_id":"f0","file_name":"old.txt"}}}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Document == nil || message.Document.FileID != "f1" || message.Caption != "inspect" {
+		t.Fatalf("message = %#v", message)
+	}
+	if message.ReplyToMessage == nil || message.ReplyToMessage.Document == nil || message.ReplyToMessage.Document.FileID != "f0" {
+		t.Fatalf("reply document = %#v", message.ReplyToMessage)
+	}
+}

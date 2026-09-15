@@ -19,6 +19,94 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
+func TestHandleDocumentSavesSafeProjectRelativePath(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	thread := model.Thread{ID: "document-thread", CWD: project, Status: "idle"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SetBinding(ctx, 123456789, 0, thread.ID, model.BindingModeBound); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{}
+	service.live = stub
+	service.liveConnected = true
+
+	_, err := service.HandleDocument(ctx, 123456789, 0, 123456789, `..\..\report.txt`, []byte("private body"), "summarize", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.turnStartCalls) != 1 {
+		t.Fatalf("turnStartCalls = %#v, want one", stub.turnStartCalls)
+	}
+	prompt := stub.turnStartCalls[0].message
+	if !strings.Contains(prompt, "summarize\n\nAttached document: \".codex-tg/uploads/") || strings.Contains(prompt, "..") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	matches, err := filepath.Glob(filepath.Join(project, ".codex-tg", "uploads", "*-report.txt"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("uploaded files = %#v, err = %v", matches, err)
+	}
+	body, err := os.ReadFile(matches[0])
+	if err != nil || string(body) != "private body" {
+		t.Fatalf("body = %q, err = %v", body, err)
+	}
+}
+
+func TestHandleDocumentRejectsInvalidCWDBeforeAppServer(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "document-thread", CWD: "relative/project", Status: "idle"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SetBinding(ctx, 123456789, 0, thread.ID, model.BindingModeBound); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{}
+	service.live = stub
+	service.liveConnected = true
+
+	if _, err := service.HandleDocument(ctx, 123456789, 0, 123456789, "report.txt", []byte("body"), "inspect", 0); err == nil {
+		t.Fatal("HandleDocument accepted a relative Project cwd")
+	}
+	if len(stub.turnStartCalls) != 0 || len(stub.turnSteerCalls) != 0 {
+		t.Fatalf("unexpected App Server calls: start=%#v steer=%#v", stub.turnStartCalls, stub.turnSteerCalls)
+	}
+}
+
+func TestHandleDocumentRejectsUploadSymlinkOutsideProject(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(project, ".codex-tg")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	thread := model.Thread{ID: "document-thread", CWD: project, Status: "idle"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.SetBinding(ctx, 123456789, 0, thread.ID, model.BindingModeBound); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{}
+	service.live = stub
+	service.liveConnected = true
+
+	if _, err := service.HandleDocument(ctx, 123456789, 0, 123456789, "report.txt", []byte("body"), "inspect", 0); err == nil {
+		t.Fatal("HandleDocument followed an upload symlink outside the Project")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("outside entries = %#v, err = %v", entries, err)
+	}
+	if len(stub.turnStartCalls) != 0 {
+		t.Fatalf("turnStartCalls = %#v, want none", stub.turnStartCalls)
+	}
+}
+
 func TestResolveRoutePrecedenceExplicitThenReplyThenBinding(t *testing.T) {
 	t.Parallel()
 

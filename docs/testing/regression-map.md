@@ -1,5 +1,25 @@
 # Regression Map
 
+## Telegram Document Input
+
+Primary tests:
+
+- `internal/telegram/api_test.go::TestMessageDecodesDocumentCaptionAndReplyDocument`
+- `internal/telegram/api_test.go::TestClientDownloadFileRejectsBodyOverMax`
+- `internal/telegram/bot_test.go::TestCaptionDocumentDispatchesOnce`
+- `internal/telegram/bot_test.go::TestBareDocumentPromptsWithoutDownload`
+- `internal/telegram/bot_test.go::TestTextReplyToDocumentDispatchesOnce`
+- `internal/telegram/bot_test.go::TestOversizeDocumentNeverDispatches`
+- `internal/telegram/bot_test.go::TestUnauthorizedDocumentDoesNotDownload`
+- `internal/daemon/service_test.go::TestHandleDocumentSavesSafeProjectRelativePath`
+- `internal/daemon/service_test.go::TestHandleDocumentRejectsInvalidCWDBeforeAppServer`
+- `internal/daemon/service_test.go::TestHandleDocumentRejectsUploadSymlinkOutsideProject`
+
+Contract notes:
+
+- A captioned document or text reply to a document is one input; a bare document only prompts for a reply.
+- Downloads and writes stay inside the routed Project and failures never call App Server.
+
 This map is the handoff index for agents changing Codex control-plane
 contracts, Telegram routing, observer panels, lifecycle recovery, diagnostics,
 or Plan Mode.

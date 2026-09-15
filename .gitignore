@@ -25,6 +25,7 @@ logs/
 coverage.out
 dist/
 tmp/
+.codex-tg/
 
 .DS_Store
 **/.DS_Store

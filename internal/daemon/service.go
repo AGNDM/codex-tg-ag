@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -328,6 +330,79 @@ func (s *Service) HandleMessage(ctx context.Context, chatID, topicID, userID int
 		return s.handleCommand(ctx, chatID, topicID, text, replyToMessageID)
 	}
 	return s.handlePlainText(ctx, chatID, topicID, text, replyToMessageID)
+}
+
+// HandleDocument persists one Telegram document inside the routed Project and
+// submits its caption/path as a single text input.
+func (s *Service) HandleDocument(ctx context.Context, chatID, topicID, userID int64, name string, data []byte, caption string, replyToMessageID int64) (*DirectResponse, error) {
+	if !s.IsAllowed(userID, chatID) {
+		return nil, nil
+	}
+	decision, err := s.resolveRoute(ctx, chatID, topicID, "", replyToMessageID)
+	if err != nil {
+		return nil, err
+	}
+	if decision.ThreadID == "" {
+		return &DirectResponse{Text: "No bound thread for this document."}, nil
+	}
+	if decision.RequestID != "" {
+		return nil, errors.New("documents cannot answer a structured Plan prompt")
+	}
+	thread, err := s.store.GetThread(ctx, decision.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	if thread == nil {
+		return nil, errors.New("document route references an unknown thread")
+	}
+	base := filepath.Clean(strings.TrimSpace(thread.CWD))
+	if base == "." || !filepath.IsAbs(base) {
+		return nil, errors.New("document route has invalid Project directory")
+	}
+	info, err := os.Stat(base)
+	if err != nil || !info.IsDir() {
+		return nil, errors.New("document Project directory is unavailable")
+	}
+	clean := safeDocumentName(name)
+	if clean == "." || clean == "" {
+		clean = "document.bin"
+	}
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	const uploadDir = ".codex-tg/uploads"
+	if err := root.MkdirAll(uploadDir, 0700); err != nil {
+		return nil, err
+	}
+	rel := filepath.Join(uploadDir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), clean))
+	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	prompt := strings.TrimSpace(caption)
+	if prompt == "" {
+		prompt = "Please inspect the attached document."
+	}
+	return s.sendInputToThreadTurn(ctx, chatID, topicID, decision.ThreadID, decision.TurnID, prompt+"\n\nAttached document: "+fmt.Sprintf("%q", filepath.ToSlash(rel)), "")
+}
+
+func safeDocumentName(name string) string {
+	base := filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, base)
 }
 
 func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID, userID int64, token string) (*DirectResponse, error) {
