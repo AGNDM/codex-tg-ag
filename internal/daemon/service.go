@@ -2966,6 +2966,7 @@ func (s *Service) refreshThreadForOperation(ctx context.Context, client Session,
 		}
 		return &thread, nil
 	}
+	thread = current.Thread
 	s.preserveTelegramOriginLiveCurrentTool(ctx, &current, previous)
 	if err := s.store.UpsertThread(ctx, thread); err != nil {
 		return nil, err
