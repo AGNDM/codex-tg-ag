@@ -55,3 +55,22 @@ func TestRecoverSendingFileDeliveriesMarksUnknown(t *testing.T) {
 		t.Fatalf("deliveries = %#v, err = %v", got, err)
 	}
 }
+
+func TestPutTelegramTurnOriginKeepsFirstDestinationAndNonce(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 42, TopicID: 9, DeliveryNonce: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 99, TopicID: 10, DeliveryNonce: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := store.GetTelegramTurnOrigin(ctx, "thread-1", "turn-1")
+	if err != nil || origin == nil || origin.ChatID != 42 || origin.TopicID != 9 || origin.DeliveryNonce != "first" {
+		t.Fatalf("origin = %#v, err = %v", origin, err)
+	}
+}

@@ -202,6 +202,7 @@ type DocumentFile struct {
 	Name        string
 	ContentType string
 	Data        []byte
+	Reader      io.Reader
 }
 
 func (c *Client) GetMe(ctx context.Context) (*User, error) {
@@ -348,6 +349,9 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID, text 
 }
 
 func (c *Client) callMultipart(ctx context.Context, method string, fields map[string]string, fileField string, document DocumentFile, out any) error {
+	if document.Reader != nil {
+		return c.callMultipartStream(ctx, method, fields, fileField, document, out)
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for key, value := range fields {
@@ -387,6 +391,68 @@ func (c *Client) callMultipart(ctx context.Context, method string, fields map[st
 		return err
 	}
 	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("telegram %s http %d: %s", method, response.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return decodeAPIResponse(method, data, out)
+}
+
+func (c *Client) callMultipartStream(ctx context.Context, method string, fields map[string]string, fileField string, document DocumentFile, out any) error {
+	reader, writer := io.Pipe()
+	multipartWriter := multipart.NewWriter(writer)
+	writeErr := make(chan error, 1)
+	go func() {
+		defer close(writeErr)
+		var err error
+		defer func() { _ = writer.CloseWithError(err); writeErr <- err }()
+		for key, value := range fields {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			if err = multipartWriter.WriteField(key, value); err != nil {
+				return
+			}
+		}
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField, escapeQuotes(document.Name)))
+		contentType := strings.TrimSpace(document.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		header.Set("Content-Type", contentType)
+		var part io.Writer
+		part, err = multipartWriter.CreatePart(header)
+		if err != nil {
+			return
+		}
+		if _, err = io.Copy(part, document.Reader); err != nil {
+			return
+		}
+		err = multipartWriter.Close()
+	}()
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/" + method
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
+	if err != nil {
+		_ = reader.Close()
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	httpClient := *c.http
+	httpClient.Timeout = 0
+	response, err := httpClient.Do(request)
+	if err != nil {
+		_ = reader.Close()
+		return err
+	}
+	defer response.Body.Close()
+	if streamErr := <-writeErr; streamErr != nil {
+		return streamErr
+	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
 		return err

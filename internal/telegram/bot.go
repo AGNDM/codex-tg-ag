@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"regexp"
@@ -204,6 +205,23 @@ func (b *Bot) SendDocumentData(ctx context.Context, chatID, topicID int64, fileN
 		Data:        data,
 	}, strings.TrimSpace(caption), nil, options)
 	cancel()
+	if err != nil {
+		return 0, err
+	}
+	if message == nil {
+		return 0, nil
+	}
+	return message.MessageID, nil
+}
+
+func (b *Bot) SendDocumentStream(ctx context.Context, chatID, topicID int64, fileName string, reader io.Reader, caption string, options model.SendOptions) (int64, error) {
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	message, err := b.client.SendDocument(sendCtx, chatID, topicID, DocumentFile{
+		Name:        fileName,
+		ContentType: "application/octet-stream",
+		Reader:      reader,
+	}, strings.TrimSpace(caption), nil, options)
 	if err != nil {
 		return 0, err
 	}

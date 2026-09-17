@@ -613,8 +613,17 @@ func (s *Service) markTelegramOriginTurn(ctx context.Context, threadID, turnID s
 	return s.store.SetState(ctx, key, model.PanelSourceTelegramInput)
 }
 
-func (s *Service) markTelegramOriginTurnFromTelegram(ctx context.Context, threadID, turnID string, chatID, topicID int64) error {
+func (s *Service) markTelegramOriginTurnFromTelegram(ctx context.Context, threadID, turnID string, chatID, topicID int64, deliveryNonce string) error {
 	err := s.markTelegramOriginTurn(ctx, threadID, turnID)
+	if err == nil {
+		err = s.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			ChatID:        chatID,
+			TopicID:       topicID,
+			DeliveryNonce: deliveryNonce,
+		})
+	}
 	s.logLifecycle("telegram_origin_turn_marked", lifecycleFields{
 		"chat_key":  model.ChatKey(chatID, topicID),
 		"thread_id": threadID,

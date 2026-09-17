@@ -80,6 +80,17 @@ Do not modify code, push, deploy, or change server configuration during the take
 
 ## Prioritized next-stage backlog
 
+### Agent-to-Telegram Project file delivery
+
+The first slice is defined by `docs/adr/ADR-022-agent-file-delivery.md` and
+`docs/process/agent-telegram-file-delivery-brief.md`. A completed
+Telegram-originated turn may emit a nonce-bound control block requesting up to
+three Project-relative regular files. Delivery is streamed, capped at the
+Telegram cloud Bot API's 50 MB document limit, and guarded by durable SQLite
+claims so observer refreshes cannot resend a successful or ambiguous upload.
+Before release, run the mapped tests and live Telegram validation, then record
+the deployed commit and daemon restart status.
+
 ### P0: interrupted turn must not remain steerable indefinitely
 
 Implementation destination: `docs/process/interrupted-turn-routing-bug-brief.md`.

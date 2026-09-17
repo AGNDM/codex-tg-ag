@@ -25,6 +25,9 @@ func (s *Service) maybeRenderFinalCard(ctx context.Context, sender Sender, targe
 	if panel == nil || snapshot.LatestFinalFP == "" || snapshot.LatestFinalFP == panel.LastFinalNoticeFP {
 		return nil
 	}
+	resolved := *snapshot
+	resolved.LatestFinalText = s.processFinalFileDeliveries(ctx, sender, thread, snapshot)
+	snapshot = &resolved
 
 	message, buttons, cardHash := s.renderFinalCard(ctx, panel.ID, thread, snapshot)
 	messageIDs, err := sender.SendRenderedMessages(ctx, target.ChatID, target.TopicID, []model.RenderedMessage{message}, buttons, notifySendOptions())
@@ -71,6 +74,9 @@ func (s *Service) maybeRenderFinalCard(ctx context.Context, sender Sender, targe
 }
 
 func (s *Service) renderFinalCard(ctx context.Context, panelID int64, thread model.Thread, snapshot *appserver.ThreadReadSnapshot) (model.RenderedMessage, [][]model.ButtonSpec, string) {
+	resolved := *snapshot
+	resolved.LatestFinalText = s.renderFileDeliveryResult(ctx, thread.ID, snapshot.LatestTurnID, snapshot.LatestFinalText)
+	snapshot = &resolved
 	buttons := [][]model.ButtonSpec{
 		{
 			s.callbackButton(ctx, "Details", "details_open", thread.ID, snapshot.LatestTurnID, "", map[string]any{

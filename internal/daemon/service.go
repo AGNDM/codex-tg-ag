@@ -117,6 +117,10 @@ func New(cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := store.RecoverSendingFileDeliveries(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	service := &Service{
 		cfg:            cfg,
 		store:          store,
@@ -1890,6 +1894,9 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			return &DirectResponse{Text: fmt.Sprintf("Lead policy %s v%d is newer than or incompatible with this daemon's %s v%d. Update the daemon or resolve the policy before starting another task.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
 		}
 	}
+	baseText := text
+	deliveryNonce := randomToken()
+	text = withFileDeliveryInstructions(baseText, deliveryNonce)
 	s.mu.RLock()
 	live := s.live
 	connected := s.liveConnected
@@ -1979,6 +1986,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
+		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, steerState.TurnID, baseText, deliveryNonce)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, steerState.TurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1991,6 +1999,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) != "" {
+		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, routeTurnID, baseText, deliveryNonce)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, routeTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2000,6 +2009,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		})
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) == "" && threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" {
+		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, thread.ActiveTurnID, baseText, deliveryNonce)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, thread.ActiveTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2012,6 +2022,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		if foundTurnID := activeTurnIDFromSteerMismatch(steerErr); foundTurnID != "" {
 			thread.ActiveTurnID = foundTurnID
 			thread.Status = "active"
+			text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, foundTurnID, baseText, deliveryNonce)
 			started = time.Now()
 			result, steerErr = live.TurnSteer(requestCtx, threadID, foundTurnID, text)
 			s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2045,6 +2056,8 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	startedNewTurn := false
 	effectiveCollaborationMode := strings.TrimSpace(collaborationMode)
 	if result == nil {
+		deliveryNonce = randomToken()
+		text = withFileDeliveryInstructions(baseText, deliveryNonce)
 		usedDefaultOverride := false
 		if effectiveCollaborationMode == "" && s.threadCollaborationOverride(ctx, threadID) == collaborationModeDefault {
 			effectiveCollaborationMode = collaborationModeDefault
@@ -2084,7 +2097,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if strings.TrimSpace(turn) != "" {
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID, deliveryNonce)
 		if policyUpgradeAgent != nil {
 			_ = s.store.UpdateLeadAgentPolicy(ctx, policyUpgradeAgent.ID, leadpolicy.ID, leadpolicy.Version)
 		}

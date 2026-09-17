@@ -296,6 +296,37 @@ type DeliveryAttempt struct {
 	CreatedAt TimeString
 }
 
+const (
+	FileDeliverySending = "sending"
+	FileDeliverySent    = "sent"
+	FileDeliveryFailed  = "failed"
+	FileDeliveryUnknown = "unknown"
+)
+
+type TelegramTurnOrigin struct {
+	ThreadID      string
+	TurnID        string
+	ChatID        int64
+	TopicID       int64
+	DeliveryNonce string
+	FinalFP       string
+	CreatedAt     TimeString
+	UpdatedAt     TimeString
+}
+
+type FileDelivery struct {
+	ThreadID       string
+	TurnID         string
+	DirectiveIndex int
+	FilePath       string
+	Caption        string
+	Status         string
+	MessageID      int64
+	ErrorText      string
+	CreatedAt      TimeString
+	UpdatedAt      TimeString
+}
+
 type ButtonSpec struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data,omitempty"`

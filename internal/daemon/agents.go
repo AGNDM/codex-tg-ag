@@ -256,7 +256,8 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 		return nil, err
 	}
 	prompt := leadpolicy.ApplyPrompt(agent.Name)
-	turnPayload, turnErr := live.TurnStart(requestCtx, thread.ID, prompt, thread.CWD, appserver.TurnStartOptions{
+	deliveryNonce := randomToken()
+	turnPayload, turnErr := live.TurnStart(requestCtx, thread.ID, withFileDeliveryInstructions(prompt, deliveryNonce), thread.CWD, appserver.TurnStartOptions{
 		Model: defaultLeadModel, ReasoningEffort: defaultLeadReasoning,
 	})
 	if turnErr != nil {
@@ -273,7 +274,7 @@ func (s *Service) createLeadAgent(ctx context.Context, chatID, topicID int64, na
 		thread.LastPreview = prompt
 		thread.UpdatedAt = time.Now().UTC().Unix()
 		_ = s.store.UpsertThread(ctx, thread)
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID, deliveryNonce)
 		s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
 	}
 	s.kickBootstrap()

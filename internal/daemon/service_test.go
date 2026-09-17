@@ -19,6 +19,14 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
+func operatorPrompt(message string) string {
+	const marker = "\n\n[Codex Telegram file delivery]\n"
+	if index := strings.Index(message, marker); index >= 0 {
+		message = message[:index]
+	}
+	return strings.TrimSpace(message)
+}
+
 func TestHandleDocumentSavesSafeProjectRelativePath(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
@@ -892,7 +900,7 @@ func TestProjectNewThreadArmsThenPlainTextCreatesThread(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one turn start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != "new-thread-id" || got.message != "first prompt" || got.cwd != "/Users/example/project" {
+	if got := stub.turnStartCalls[0]; got.threadID != "new-thread-id" || operatorPrompt(got.message) != "first prompt" || got.cwd != "/Users/example/project" {
 		t.Fatalf("turnStartCall = %#v, want new thread first prompt in project cwd", got)
 	}
 	binding, err := service.store.GetBinding(ctx, 123456789, 0)
@@ -1038,7 +1046,7 @@ func TestNewChatCommandCreatesCodexUIChatCWDAndBinds(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one turn start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != "new-chat-thread" || got.message != "Проверь tool call по погоде" || got.cwd != expectedCWD {
+	if got := stub.turnStartCalls[0]; got.threadID != "new-chat-thread" || operatorPrompt(got.message) != "Проверь tool call по погоде" || got.cwd != expectedCWD {
 		t.Fatalf("turnStartCall = %#v, want new chat first prompt with cwd %q", got, expectedCWD)
 	}
 	if info, err := os.Stat(expectedCWD); err != nil || !info.IsDir() {
@@ -1130,7 +1138,7 @@ func TestNewThreadCommandCreatesThreadWithoutCWDAndBinds(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one turn start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != "new-thread-without-cwd" || got.message != "scratch prompt" || got.cwd != "" {
+	if got := stub.turnStartCalls[0]; got.threadID != "new-thread-without-cwd" || operatorPrompt(got.message) != "scratch prompt" || got.cwd != "" {
 		t.Fatalf("turnStartCall = %#v, want no-cwd first prompt", got)
 	}
 	thread, err := service.store.GetThread(ctx, "new-thread-without-cwd")
@@ -2891,7 +2899,7 @@ func TestPlainReplyToSyntheticPlanPromptUsesTurnSteer(t *testing.T) {
 	if len(stub.turnSteerCalls) != 1 {
 		t.Fatalf("turnSteerCalls = %#v, want one steer", stub.turnSteerCalls)
 	}
-	if got := stub.turnSteerCalls[0]; got.threadID != thread.ID || got.turnID != "turn-synthetic" || got.message != "Use option A" {
+	if got := stub.turnSteerCalls[0]; got.threadID != thread.ID || got.turnID != "turn-synthetic" || operatorPrompt(got.message) != "Use option A" {
 		t.Fatalf("turn steer call = %#v, want synthetic plan answer", got)
 	}
 	if len(stub.turnStartCalls) != 0 {
@@ -2938,7 +2946,7 @@ func TestPlainReplyToSyntheticPlanPromptFallsBackToTurnStart(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one fallback start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || got.message != "Start new turn instead" {
+	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || operatorPrompt(got.message) != "Start new turn instead" {
 		t.Fatalf("turn start call = %#v, want fallback answer", got)
 	}
 }
@@ -2973,7 +2981,7 @@ func TestReplyToActiveThreadSteersActiveTurn(t *testing.T) {
 	if len(stub.turnSteerCalls) != 1 {
 		t.Fatalf("turnSteerCalls = %#v, want one steer", stub.turnSteerCalls)
 	}
-	if got := stub.turnSteerCalls[0]; got.threadID != thread.ID || got.turnID != "turn-active" || got.message != "Add this while running" {
+	if got := stub.turnSteerCalls[0]; got.threadID != thread.ID || got.turnID != "turn-active" || operatorPrompt(got.message) != "Add this while running" {
 		t.Fatalf("turn steer call = %#v, want active turn input", got)
 	}
 	if len(stub.turnStartCalls) != 0 {
@@ -3287,7 +3295,7 @@ func TestPlanCommandUsesBoundThreadWhenNoExplicitThread(t *testing.T) {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
 	got := stub.turnStartCalls[0]
-	if got.threadID != thread.ID || got.message != "propose options" || got.collaborationMode != collaborationModePlan {
+	if got.threadID != thread.ID || operatorPrompt(got.message) != "propose options" || got.collaborationMode != collaborationModePlan {
 		t.Fatalf("turn start call = %#v, want bound plan prompt", got)
 	}
 }
@@ -3324,7 +3332,7 @@ func TestPlanCommandUnknownHeadUsesBoundThreadAsPromptText(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || got.message != "first second third" {
+	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || operatorPrompt(got.message) != "first second third" {
 		t.Fatalf("turn start call = %#v, want full prompt on bound thread", got)
 	}
 }
@@ -3421,7 +3429,7 @@ func TestPlanCommandKnownThreadHeadStaysExplicit(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != explicit.ID || got.message != "propose options" {
+	if got := stub.turnStartCalls[0]; got.threadID != explicit.ID || operatorPrompt(got.message) != "propose options" {
 		t.Fatalf("turn start call = %#v, want explicit plan prompt", got)
 	}
 }
@@ -3869,7 +3877,7 @@ func TestReplyPlanFlagStartsPlanCollaborationMode(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.collaborationMode != collaborationModePlan || got.message != "sketch the plan" {
+	if got := stub.turnStartCalls[0]; got.collaborationMode != collaborationModePlan || operatorPrompt(got.message) != "sketch the plan" {
 		t.Fatalf("turn start call = %#v, want plan input", got)
 	}
 }
@@ -3909,7 +3917,7 @@ func TestReplyDefaultFlagStartsDefaultCollaborationMode(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.collaborationMode != collaborationModeDefault || got.message != "do the work" {
+	if got := stub.turnStartCalls[0]; got.collaborationMode != collaborationModeDefault || operatorPrompt(got.message) != "do the work" {
 		t.Fatalf("turn start call = %#v, want default input", got)
 	}
 }
@@ -3946,7 +3954,7 @@ func TestDefaultModeCommandStartsDefaultCollaborationMode(t *testing.T) {
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
-	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || got.collaborationMode != collaborationModeDefault || got.message != "do the work" {
+	if got := stub.turnStartCalls[0]; got.threadID != thread.ID || got.collaborationMode != collaborationModeDefault || operatorPrompt(got.message) != "do the work" {
 		t.Fatalf("turn start call = %#v, want default-mode command", got)
 	}
 }
@@ -4152,7 +4160,7 @@ func TestPlanModeCommandCanRouteByReply(t *testing.T) {
 		t.Fatalf("turnStartCalls = %#v, want one start", stub.turnStartCalls)
 	}
 	got := stub.turnStartCalls[0]
-	if got.collaborationMode != collaborationModePlan || got.message != "plan this reply-routed task" {
+	if got.collaborationMode != collaborationModePlan || operatorPrompt(got.message) != "plan this reply-routed task" {
 		t.Fatalf("turn start call = %#v, want reply-routed plan text", got)
 	}
 }

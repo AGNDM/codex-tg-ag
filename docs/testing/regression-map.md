@@ -1,5 +1,33 @@
 # Regression Map
 
+## Agent File Delivery
+
+ADR: `docs/adr/ADR-022-agent-file-delivery.md`; feature brief is
+`docs/process/agent-telegram-file-delivery-brief.md`.
+
+Primary tests:
+
+- `internal/daemon/file_delivery_test.go::TestParseFileDeliveryFinalRequiresMatchingNonceAndStripsDirective`
+- `internal/daemon/file_delivery_test.go::TestOpenProjectDeliveryFileEnforcesProjectBoundary`
+- `internal/daemon/file_delivery_linux_test.go::TestOpenProjectDeliveryFileRejectsFIFOWithoutBlocking`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesRequiresCompletedTurn`
+- `internal/storage/store_file_deliveries_test.go::TestClaimFileDeliveriesFreezesTurnAndDeduplicates`
+- `internal/storage/store_file_deliveries_test.go::TestRecoverSendingFileDeliveriesMarksUnknown`
+- `internal/storage/store_file_deliveries_test.go::TestPutTelegramTurnOriginKeepsFirstDestinationAndNonce`
+- `internal/telegram/api_test.go::TestClientSendDocumentStreamsReader`
+
+Contract notes:
+
+- Only completed Telegram-originated turns with the matching per-turn nonce may
+  request delivery.
+- Paths stay inside the bound Project, protected paths are rejected, and each
+  regular file is limited to the cloud Bot API's 50 MB document limit.
+- Claims are durable before upload; sent files are not repeated, while ambiguous
+  interrupted uploads become `unknown` and are not retried automatically.
+- Live Telegram validation must cover a successful send, a rejected path, and a
+  repeated panel refresh without duplicate delivery.
+
 ## Telegram Document Input
 
 Primary tests:

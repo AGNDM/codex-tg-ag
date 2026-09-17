@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
 	"testing"
@@ -88,6 +89,14 @@ func (s *recordingSender) SendDocumentData(ctx context.Context, chatID, topicID 
 		options:  options,
 	})
 	return int64(len(s.documents)), nil
+}
+
+func (s *recordingSender) SendDocumentStream(ctx context.Context, chatID, topicID int64, fileName string, reader io.Reader, caption string, options model.SendOptions) (int64, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return 0, err
+	}
+	return s.SendDocumentData(ctx, chatID, topicID, fileName, data, caption, options)
 }
 
 func hasRecordedEntity(entities []model.MessageEntity, entityType, language string) bool {

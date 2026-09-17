@@ -748,9 +748,11 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		return nil, err
 	}
 
+	deliveryNonce := randomToken()
+	promptWithDelivery := withFileDeliveryInstructions(prompt, deliveryNonce)
 	options := s.turnStartOptions(ctx, "", &thread)
 	started = time.Now()
-	turnPayload, err := live.TurnStart(requestCtx, thread.ID, prompt, thread.CWD, options)
+	turnPayload, err := live.TurnStart(requestCtx, thread.ID, promptWithDelivery, thread.CWD, options)
 	s.logAppServerCall("TurnStart", started, err, live, lifecycleFields{
 		"thread_id":        thread.ID,
 		"returned_turn_id": appserverThreadTurnID(turnPayload),
@@ -770,7 +772,7 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		thread.Status = "inProgress"
 		thread.LastPreview = prompt
 		_ = s.store.UpsertThread(ctx, thread)
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID, deliveryNonce)
 		s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
 	}
 	if _, refreshErr := s.refreshThreadForOperation(ctx, live, thread.ID, "refresh_new_thread_after_start"); refreshErr != nil {

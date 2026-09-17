@@ -232,6 +232,32 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS telegram_turn_origins (
+		thread_id TEXT NOT NULL,
+		turn_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL DEFAULT 0,
+		delivery_nonce TEXT NOT NULL,
+		final_fp TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(thread_id, turn_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS file_deliveries (
+		thread_id TEXT NOT NULL,
+		turn_id TEXT NOT NULL,
+		directive_index INTEGER NOT NULL,
+		file_path TEXT NOT NULL,
+		caption TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		message_id INTEGER NOT NULL DEFAULT 0,
+		error_text TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(thread_id, turn_id, directive_index)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_name, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_bindings_thread_id ON thread_bindings(thread_id);
