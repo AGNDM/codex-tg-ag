@@ -133,7 +133,6 @@ func TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := &appserver.ThreadReadSnapshot{
-		ThreadID:         thread.ID,
 		LatestTurnID:     "turn-file",
 		LatestTurnStatus: "completed",
 		LatestFinalFP:    "final-fp",
@@ -170,7 +169,7 @@ func TestProcessFinalFileDeliveriesRequiresCompletedTurn(t *testing.T) {
 	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: "turn-file", ChatID: 42, DeliveryNonce: "nonce-1"}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := &appserver.ThreadReadSnapshot{ThreadID: thread.ID, LatestTurnID: "turn-file", LatestTurnStatus: "interrupted", LatestFinalFP: "fp", LatestFinalText: "```codex-tg-file\n" + `{"version":1,"nonce":"nonce-1","files":[{"path":"report.txt"}]}` + "\n```"}
+	snapshot := &appserver.ThreadReadSnapshot{LatestTurnID: "turn-file", LatestTurnStatus: "interrupted", LatestFinalFP: "fp", LatestFinalText: "```codex-tg-file\n" + `{"version":1,"nonce":"nonce-1","files":[{"path":"report.txt"}]}` + "\n```"}
 	sender := &recordingSender{}
 	_ = service.processFinalFileDeliveries(ctx, sender, thread, snapshot)
 	if len(sender.documents) != 0 {
