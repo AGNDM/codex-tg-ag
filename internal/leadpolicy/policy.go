@@ -1,0 +1,55 @@
+package leadpolicy
+
+import (
+	_ "embed"
+	"fmt"
+	"strings"
+)
+
+const (
+	ID      = "lead-default"
+	Version = 3
+	Marker  = "[ctr-go lead policy]"
+)
+
+type Compatibility int
+
+const (
+	NeedsApply Compatibility = iota
+	Current
+	Incompatible
+)
+
+func CompatibilityFor(policyID string, version int) Compatibility {
+	policyID = strings.TrimSpace(policyID)
+	if policyID == "" || (policyID == ID && version < Version) {
+		return NeedsApply
+	}
+	if policyID == ID && version == Version {
+		return Current
+	}
+	return Incompatible
+}
+
+//go:embed lead-agent-v3.md
+var document string
+
+func Document() string {
+	return strings.TrimSpace(document)
+}
+
+func ApplyPrompt(leadName string) string {
+	return fmt.Sprintf("%s\n\nApply the following durable operating policy to your role as lead %s. Treat it as continuing instruction for this persistent thread. Acknowledge the policy version, summarize when you will use each native custom agent, and then wait for the operator's next task.\n\n%s", Marker, strings.TrimSpace(leadName), Document())
+}
+
+func RuntimeReminder(userText string) string {
+	return fmt.Sprintf("%s v%d runtime reminder: you are the configured lead for one real Codex Project, running through Codex App Server and the codex-tg Telegram bridge on a small Azure Linux server. Speak directly with the operator. New leads default to gpt-5.6-sol with medium reasoning, while the operator may choose any model currently available from Codex. Use native luna_executor for bounded routine execution and native astra_advisor only as a temporary read-only expert for the escalation conditions in the applied policy. Conserve server resources, review and integrate every subagent result yourself, and discuss critical-path actions in Telegram before acting.\n\nOperator request:\n%s", Marker, Version, userText)
+}
+
+func ApplyWithRequest(leadName, userText string) string {
+	return fmt.Sprintf("%s\n\nApply the following durable operating policy to your role as lead %s, then carry out the operator request below under that policy. Treat the policy as continuing instruction for this persistent thread.\n\n%s\n\n## Operator request\n\n%s", Marker, strings.TrimSpace(leadName), Document(), userText)
+}
+
+func IsPolicyPrompt(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), Marker)
+}

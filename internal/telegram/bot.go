@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"regexp"
@@ -22,9 +23,17 @@ var telegramBotTokenURLPattern = regexp.MustCompile(`bot[0-9]+:[A-Za-z0-9_-]+`)
 type Bot struct {
 	cfg     config.Config
 	client  *Client
-	service *daemon.Service
+	service botService
 	logger  *log.Logger
 	me      *User
+}
+
+type botService interface {
+	IsAllowed(int64, int64) bool
+	HandleMessage(context.Context, int64, int64, int64, string, int64) (*daemon.DirectResponse, error)
+	HandleDocument(context.Context, int64, int64, int64, string, []byte, string, int64) (*daemon.DirectResponse, error)
+	HandleCallback(context.Context, int64, int64, int64, int64, string) (*daemon.DirectResponse, error)
+	RegisterDirectDelivery(context.Context, int64, int64, int64, *daemon.DirectResponse) error
 }
 
 type Document struct {
@@ -205,6 +214,23 @@ func (b *Bot) SendDocumentData(ctx context.Context, chatID, topicID int64, fileN
 	return message.MessageID, nil
 }
 
+func (b *Bot) SendDocumentStream(ctx context.Context, chatID, topicID int64, fileName string, reader io.Reader, caption string, options model.SendOptions) (int64, error) {
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	message, err := b.client.SendDocument(sendCtx, chatID, topicID, DocumentFile{
+		Name:        fileName,
+		ContentType: "application/octet-stream",
+		Reader:      reader,
+	}, strings.TrimSpace(caption), nil, options)
+	if err != nil {
+		return 0, err
+	}
+	if message == nil {
+		return 0, nil
+	}
+	return message.MessageID, nil
+}
+
 func (b *Bot) DeleteMessage(ctx context.Context, chatID, topicID, messageID int64) error {
 	deleteCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -225,7 +251,44 @@ func (b *Bot) handleUpdate(ctx context.Context, update Update) error {
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message Message) error {
-	if message.From == nil || strings.TrimSpace(message.Text) == "" {
+	if message.From == nil {
+		return nil
+	}
+	if !b.service.IsAllowed(message.From.ID, message.Chat.ID) {
+		return nil
+	}
+	doc := message.Document
+	caption := message.Caption
+	if doc == nil && message.ReplyToMessage != nil && message.ReplyToMessage.Document != nil && strings.TrimSpace(message.Text) != "" {
+		doc, caption = message.ReplyToMessage.Document, message.Text
+	}
+	if doc != nil {
+		if message.Document != nil && strings.TrimSpace(caption) == "" {
+			_, err := b.SendMessage(ctx, message.Chat.ID, message.MessageThreadID, "Document received. Reply to the original document with the task you want Codex to perform.", nil, model.SendOptions{Silent: true})
+			return err
+		}
+		if doc.FileSize > 20<<20 {
+			return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, errors.New("document exceeds 20 MB limit"))
+		}
+		path, err := b.client.GetFile(ctx, doc.FileID)
+		if err != nil {
+			return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, err)
+		}
+		data, err := b.client.DownloadFile(ctx, path, 20<<20)
+		if err != nil {
+			return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, err)
+		}
+		replyTo := int64(0)
+		if message.ReplyToMessage != nil {
+			replyTo = message.ReplyToMessage.MessageID
+		}
+		response, err := b.service.HandleDocument(ctx, message.Chat.ID, message.MessageThreadID, message.From.ID, doc.FileName, data, caption, replyTo)
+		if err != nil {
+			return b.sendFailureMessage(ctx, message.Chat.ID, message.MessageThreadID, err)
+		}
+		return b.deliverDirectResponse(ctx, message.Chat.ID, message.MessageThreadID, response)
+	}
+	if strings.TrimSpace(message.Text) == "" {
 		return nil
 	}
 	replyTo := int64(0)
@@ -285,13 +348,13 @@ func (b *Bot) deliverDirectResponse(ctx context.Context, chatID, topicID int64, 
 func (b *Bot) sendFailureMessage(ctx context.Context, chatID, topicID int64, cause error) error {
 	if chatID == 0 {
 		if cause != nil {
-			b.logger.Printf("telegram handler error without chat context: %v", cause)
+			b.logger.Printf("telegram handler error without chat context: %s", sanitizeTelegramLogError(cause))
 		}
 		return nil
 	}
 	text := "Request failed inside the local Go bridge. Try /repair or /status."
 	if cause != nil {
-		b.logger.Printf("telegram handler error: %v", cause)
+		b.logger.Printf("telegram handler error: %s", sanitizeTelegramLogError(cause))
 	}
 	_, err := b.SendMessage(ctx, chatID, topicID, text, nil, model.SendOptions{Silent: true})
 	if err != nil {
@@ -308,6 +371,8 @@ func defaultCommands() []BotCommand {
 		{Command: "start", Description: "Bridge status and quick help"},
 		{Command: "help", Description: "Command list"},
 		{Command: "status", Description: "Daemon and routing status"},
+		{Command: "agents", Description: "List durable lead agents"},
+		{Command: "agent", Description: "Create or configure this topic's lead"},
 		{Command: "threads", Description: "List cached Codex threads"},
 		{Command: "projects", Description: "List cached projects"},
 		{Command: "newchat", Description: "Start a new Codex UI Chat"},

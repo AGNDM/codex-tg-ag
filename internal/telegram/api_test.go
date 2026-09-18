@@ -414,3 +414,69 @@ func TestClientSendDocumentSilentSetsDisableNotification(t *testing.T) {
 		t.Fatalf("SendDocument failed: %v", err)
 	}
 }
+
+func TestClientSendDocumentStreamsReader(t *testing.T) {
+	var documentBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reader, err := r.MultipartReader()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(part)
+			if part.FormName() == "document" {
+				documentBody = string(data)
+			}
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":99,"chat":{"id":42,"type":"private"}}}`))
+	}))
+	defer server.Close()
+	client := NewClient("token")
+	client.baseURL = server.URL
+
+	message, err := client.SendDocument(context.Background(), 42, 0, DocumentFile{Name: "report.txt", Reader: strings.NewReader("streamed-body")}, "", nil, model.SendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if documentBody != "streamed-body" || message == nil || message.MessageID != 99 {
+		t.Fatalf("body = %q, message = %#v", documentBody, message)
+	}
+}
+
+func TestClientDownloadFileRejectsBodyOverMax(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/file/bottoken/docs/a/b.bin" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+	client := NewClient("token")
+	client.baseURL = server.URL + "/bot" + "token"
+	if _, err := client.DownloadFile(context.Background(), "docs/a/b.bin", 4); err == nil {
+		t.Fatal("DownloadFile accepted body larger than max")
+	}
+}
+
+func TestMessageDecodesDocumentCaptionAndReplyDocument(t *testing.T) {
+	var message Message
+	if err := json.Unmarshal([]byte(`{"message_id":2,"caption":"inspect","document":{"file_id":"f1","file_name":"a.txt","file_size":3},"reply_to_message":{"message_id":1,"document":{"file_id":"f0","file_name":"old.txt"}}}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Document == nil || message.Document.FileID != "f1" || message.Caption != "inspect" {
+		t.Fatalf("message = %#v", message)
+	}
+	if message.ReplyToMessage == nil || message.ReplyToMessage.Document == nil || message.ReplyToMessage.Document.FileID != "f0" {
+		t.Fatalf("reply document = %#v", message.ReplyToMessage)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/config"
 	"github.com/mideco-tech/codex-tg/internal/control"
+	"github.com/mideco-tech/codex-tg/internal/leadpolicy"
 	"github.com/mideco-tech/codex-tg/internal/model"
 	"github.com/mideco-tech/codex-tg/internal/storage"
 )
@@ -112,6 +115,10 @@ func New(cfg config.Config) (*Service, error) {
 	}
 	store, err := storage.Open(cfg.Paths.DBPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := store.RecoverSendingFileDeliveries(context.Background()); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	service := &Service{
@@ -327,6 +334,79 @@ func (s *Service) HandleMessage(ctx context.Context, chatID, topicID, userID int
 		return s.handleCommand(ctx, chatID, topicID, text, replyToMessageID)
 	}
 	return s.handlePlainText(ctx, chatID, topicID, text, replyToMessageID)
+}
+
+// HandleDocument persists one Telegram document inside the routed Project and
+// submits its caption/path as a single text input.
+func (s *Service) HandleDocument(ctx context.Context, chatID, topicID, userID int64, name string, data []byte, caption string, replyToMessageID int64) (*DirectResponse, error) {
+	if !s.IsAllowed(userID, chatID) {
+		return nil, nil
+	}
+	decision, err := s.resolveRoute(ctx, chatID, topicID, "", replyToMessageID)
+	if err != nil {
+		return nil, err
+	}
+	if decision.ThreadID == "" {
+		return &DirectResponse{Text: "No bound thread for this document."}, nil
+	}
+	if decision.RequestID != "" {
+		return nil, errors.New("documents cannot answer a structured Plan prompt")
+	}
+	thread, err := s.store.GetThread(ctx, decision.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	if thread == nil {
+		return nil, errors.New("document route references an unknown thread")
+	}
+	base := filepath.Clean(strings.TrimSpace(thread.CWD))
+	if base == "." || !filepath.IsAbs(base) {
+		return nil, errors.New("document route has invalid Project directory")
+	}
+	info, err := os.Stat(base)
+	if err != nil || !info.IsDir() {
+		return nil, errors.New("document Project directory is unavailable")
+	}
+	clean := safeDocumentName(name)
+	if clean == "." || clean == "" {
+		clean = "document.bin"
+	}
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	const uploadDir = ".codex-tg/uploads"
+	if err := root.MkdirAll(uploadDir, 0700); err != nil {
+		return nil, err
+	}
+	rel := filepath.Join(uploadDir, fmt.Sprintf("%d-%s", time.Now().UnixNano(), clean))
+	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	prompt := strings.TrimSpace(caption)
+	if prompt == "" {
+		prompt = "Please inspect the attached document."
+	}
+	return s.sendInputToThreadTurn(ctx, chatID, topicID, decision.ThreadID, decision.TurnID, prompt+"\n\nAttached document: "+fmt.Sprintf("%q", filepath.ToSlash(rel)), "")
+}
+
+func safeDocumentName(name string) string {
+	base := filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, base)
 }
 
 func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID, userID int64, token string) (*DirectResponse, error) {
@@ -1303,7 +1383,11 @@ func (s *Service) handleCommand(ctx context.Context, chatID, topicID int64, raw 
 	case "/start":
 		return &DirectResponse{Text: "ctr-go is online.\nUse /status, /threads, /projects, /context, or /observe all."}, nil
 	case "/help":
-		return &DirectResponse{Text: "Commands:\n/start\n/help\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
+		return &DirectResponse{Text: "Commands:\n/start\n/help\n/agents\n/agent create <name>\n/agent show\n/agent project\n/agent project <codex-project-name-or-id>\n/agent model <model-id|sol|luna|astra> [effort]\n/agent policy\n/agent policy apply\n/threads [limit|search]\n/projects\n/new <project> <prompt>\n/newchat <prompt>\n/newthread <prompt>\n/show <thread>\n/bind <thread>\n/reply [--plan] <thread> <text>\n/plan <text>\n/plan <thread_id> <text>\n/settings\n/model\n/effort\n/context\n/observe all|off\n/panelmode [per_run|stable]\n/status\n/repair\n/stop [thread]\n/approve <request_id>\n/deny <request_id>"}, nil
+	case "/agents":
+		return s.leadAgentsOverview(ctx)
+	case "/agent":
+		return s.leadAgentCommand(ctx, chatID, topicID, rest)
 	case "/status":
 		text, err := s.StatusSnapshot(ctx, chatID, topicID)
 		if err != nil {
@@ -1485,6 +1569,9 @@ func (s *Service) codexModelMenu(ctx context.Context) (*DirectResponse, error) {
 		{s.callbackButton(ctx, selectedButtonLabel("Auto", current == ""), "settings_model_set", "settings", "", "", map[string]any{"value": ""})},
 	}
 	for _, option := range models {
+		if option.Hidden {
+			continue
+		}
 		label := option.ID
 		if label == "" {
 			continue
@@ -1623,8 +1710,11 @@ func (s *Service) settingsClient() Session {
 func selectedModelOption(models []appserver.ModelOption, value string) (appserver.ModelOption, bool) {
 	value = strings.TrimSpace(value)
 	var first appserver.ModelOption
-	for index, option := range models {
-		if index == 0 {
+	for _, option := range models {
+		if option.Hidden {
+			continue
+		}
+		if first.ID == "" {
 			first = option
 		}
 		if value != "" && option.ID == value {
@@ -1790,6 +1880,23 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if thread == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown thread: %s", threadID)}, nil
 	}
+	operatorText := text
+	var leadAgent *model.LeadAgent
+	var policyUpgradeAgent *model.LeadAgent
+	if agent, agentErr := s.store.GetLeadAgentByTopic(ctx, chatID, topicID); agentErr != nil {
+		return nil, agentErr
+	} else if agent != nil && agent.ThreadID == threadID {
+		leadAgent = agent
+		if !leadpolicy.IsPolicyPrompt(text) {
+			switch leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) {
+			case leadpolicy.Current:
+			case leadpolicy.NeedsApply:
+				policyUpgradeAgent = agent
+			case leadpolicy.Incompatible:
+				return &DirectResponse{Text: fmt.Sprintf("Lead policy %s v%d is newer than or incompatible with this daemon's %s v%d. Update the daemon or resolve the policy before starting another task.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
+			}
+		}
+	}
 	s.mu.RLock()
 	live := s.live
 	connected := s.liveConnected
@@ -1801,10 +1908,41 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		})
 		return &DirectResponse{Text: "Live app-server session is not ready yet. Try /status or /repair."}, nil
 	}
+	operationCWD := thread.CWD
+	if projectRoot, projectErr := s.leadProjectRoot(ctx, live, chatID, topicID, threadID); projectErr != nil {
+		return nil, projectErr
+	} else if projectRoot != "" {
+		operationCWD = projectRoot
+	}
+	projectPolicy := adoptedProjectAgentPolicy(operationCWD)
+	role := "agent"
+	if leadAgent != nil {
+		role = "lead"
+	}
+	projectText := operatorText
+	legacyText := operatorText
+	if leadAgent != nil && !leadpolicy.IsPolicyPrompt(operatorText) {
+		if policyUpgradeAgent != nil {
+			legacyText = leadpolicy.ApplyWithRequest(leadAgent.Name, operatorText)
+			projectText = legacyText
+		} else {
+			legacyText = leadpolicy.RuntimeReminder(operatorText)
+		}
+	}
+	newTurnProtocol := fileDeliveryProtocol{Version: 1, Nonce: randomToken()}
+	if projectPolicy == projectAgentPolicyVersion {
+		newTurnProtocol = fileDeliveryProtocol{Version: 2}
+	}
+	newTurnText := legacyText
+	if newTurnProtocol.Version == 2 {
+		newTurnText = projectText
+	}
+	text = withFileDeliveryProtocol(newTurnText, newTurnProtocol, role)
+	deliveryProtocol := newTurnProtocol
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
-	_, err := live.ThreadResume(requestCtx, threadID, thread.CWD)
+	_, err := live.ThreadResume(requestCtx, threadID, operationCWD)
 	s.logAppServerCall("ThreadResume", started, err, live, lifecycleFields{
 		"thread_id": threadID,
 	})
@@ -1823,7 +1961,57 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	var result map[string]any
 	var steerErr error
 	steerState, _ := s.resolveArmedSteer(ctx, chatID, topicID)
+	now := time.Now().UTC()
+	type inputTarget struct {
+		turnID string
+		route  string
+	}
+	targets := []inputTarget{
+		{turnID: routeTurnID, route: "reply"},
+		{turnID: thread.ActiveTurnID, route: "active_turn"},
+	}
+	if steerState != nil && steerState.ThreadID == threadID {
+		targets = append([]inputTarget{{turnID: steerState.TurnID, route: "armed"}}, targets...)
+	}
+	for _, target := range targets {
+		turnID := strings.TrimSpace(target.turnID)
+		if turnID == "" {
+			continue
+		}
+		decision, expiresAt, ok := s.interruptedTurnInputDecision(ctx, threadID, turnID, now)
+		if !ok {
+			continue
+		}
+		if decision == terminalGateDefer {
+			s.logLifecycle("telegram_turn_input_rejected", lifecycleFields{
+				"thread_id":   threadID,
+				"turn_id":     turnID,
+				"route":       target.route,
+				"reason":      "interrupted_state_pending",
+				"defer_until": expiresAt,
+			})
+			return &DirectResponse{
+				Text:     fmt.Sprintf("Codex is confirming that turn %s was interrupted. Your message was not submitted; retry shortly.", turnID),
+				ThreadID: threadID,
+				TurnID:   turnID,
+			}, nil
+		}
+		if decision == terminalGateAccept {
+			if steerState != nil && steerState.ThreadID == threadID && steerState.TurnID == turnID {
+				_ = s.store.ClearSteerState(ctx, chatID, topicID)
+				steerState = nil
+			}
+			if routeTurnID == turnID {
+				routeTurnID = ""
+			}
+			if thread.ActiveTurnID == turnID {
+				thread.ActiveTurnID = ""
+				thread.Status = "interrupted"
+			}
+		}
+	}
 	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, steerState.TurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, steerState.TurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1836,6 +2024,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) != "" {
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, routeTurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, routeTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1845,6 +2034,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		})
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) == "" && threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" {
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, thread.ActiveTurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, thread.ActiveTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1857,6 +2047,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		if foundTurnID := activeTurnIDFromSteerMismatch(steerErr); foundTurnID != "" {
 			thread.ActiveTurnID = foundTurnID
 			thread.Status = "active"
+			text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, foundTurnID, projectText, legacyText, role)
 			started = time.Now()
 			result, steerErr = live.TurnSteer(requestCtx, threadID, foundTurnID, text)
 			s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1890,14 +2081,16 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	startedNewTurn := false
 	effectiveCollaborationMode := strings.TrimSpace(collaborationMode)
 	if result == nil {
+		deliveryProtocol = newTurnProtocol
+		text = withFileDeliveryProtocol(newTurnText, deliveryProtocol, role)
 		usedDefaultOverride := false
 		if effectiveCollaborationMode == "" && s.threadCollaborationOverride(ctx, threadID) == collaborationModeDefault {
 			effectiveCollaborationMode = collaborationModeDefault
 			usedDefaultOverride = true
 		}
-		options := s.turnStartOptions(ctx, effectiveCollaborationMode, thread)
+		options := s.turnStartOptionsForRoute(ctx, chatID, topicID, effectiveCollaborationMode, thread)
 		started = time.Now()
-		result, err = live.TurnStart(requestCtx, threadID, text, thread.CWD, options)
+		result, err = live.TurnStart(requestCtx, threadID, text, operationCWD, options)
 		s.logAppServerCall("TurnStart", started, err, live, lifecycleFields{
 			"thread_id":           threadID,
 			"returned_turn_id":    appserverThreadTurnID(result),
@@ -1929,7 +2122,10 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if strings.TrimSpace(turn) != "" {
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID, deliveryProtocol.Version, deliveryProtocol.Nonce)
+		if policyUpgradeAgent != nil {
+			_ = s.store.UpdateLeadAgentPolicy(ctx, policyUpgradeAgent.ID, leadpolicy.ID, leadpolicy.Version)
+		}
 	}
 	if _, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_after_start"); refreshErr != nil {
 		s.logLifecycle("thread_refresh_failed", lifecycleFields{
@@ -1971,6 +2167,26 @@ func (s *Service) turnStartOptions(ctx context.Context, collaborationMode string
 	if options.Model == "" && thread != nil {
 		options.Model = strings.TrimSpace(thread.PreferredModel)
 	}
+	return options
+}
+
+func (s *Service) turnStartOptionsForRoute(ctx context.Context, chatID, topicID int64, collaborationMode string, thread *model.Thread) appserver.TurnStartOptions {
+	options := s.turnStartOptions(ctx, collaborationMode, thread)
+	if thread == nil {
+		return options
+	}
+	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
+	if err != nil || agent == nil || agent.ThreadID != thread.ID {
+		return options
+	}
+	options.Model = strings.TrimSpace(agent.Model)
+	options.ReasoningEffort = normalizeReasoningEffort(agent.ReasoningEffort)
+	options.SandboxMode = "workspaceWrite"
+	if root := strings.TrimSpace(thread.CWD); root != "" {
+		options.WritableRoots = []string{root}
+	}
+	options.ApprovalPolicy = "on-request"
+	options.ApprovalsReviewer = "auto_review"
 	return options
 }
 
@@ -2863,6 +3079,7 @@ func (s *Service) refreshThreadForOperation(ctx context.Context, client Session,
 		}
 		return &thread, nil
 	}
+	thread = current.Thread
 	s.preserveTelegramOriginLiveCurrentTool(ctx, &current, previous)
 	if err := s.store.UpsertThread(ctx, thread); err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strings"
 	"time"
 
@@ -60,8 +61,63 @@ type Message struct {
 	From            *User           `json:"from"`
 	Chat            Chat            `json:"chat"`
 	Text            string          `json:"text"`
+	Caption         string          `json:"caption"`
+	Document        *DocumentMeta   `json:"document"`
 	Entities        []MessageEntity `json:"entities,omitempty"`
 	ReplyToMessage  *Message        `json:"reply_to_message"`
+}
+
+type DocumentMeta struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
+type telegramFile struct {
+	FilePath string `json:"file_path"`
+}
+
+func (c *Client) GetFile(ctx context.Context, fileID string) (string, error) {
+	var f telegramFile
+	if err := c.callJSON(ctx, "getFile", map[string]string{"file_id": fileID}, &f); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(f.FilePath) == "" {
+		return "", fmt.Errorf("telegram returned empty file path")
+	}
+	return f.FilePath, nil
+}
+
+func (c *Client) DownloadFile(ctx context.Context, filePath string, max int64) ([]byte, error) {
+	parts := strings.Split(strings.Trim(filePath, "/"), "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	u := strings.Replace(c.baseURL, "/bot", "/file/bot", 1) + "/" + strings.Join(parts, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram file download returned %s", resp.Status)
+	}
+	if resp.ContentLength > max {
+		return nil, fmt.Errorf("document exceeds maximum size")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("document exceeds maximum size")
+	}
+	return data, nil
 }
 
 type CallbackQuery struct {
@@ -146,6 +202,7 @@ type DocumentFile struct {
 	Name        string
 	ContentType string
 	Data        []byte
+	Reader      io.Reader
 }
 
 func (c *Client) GetMe(ctx context.Context) (*User, error) {
@@ -292,6 +349,9 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID, text 
 }
 
 func (c *Client) callMultipart(ctx context.Context, method string, fields map[string]string, fileField string, document DocumentFile, out any) error {
+	if document.Reader != nil {
+		return c.callMultipartStream(ctx, method, fields, fileField, document, out)
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for key, value := range fields {
@@ -331,6 +391,68 @@ func (c *Client) callMultipart(ctx context.Context, method string, fields map[st
 		return err
 	}
 	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("telegram %s http %d: %s", method, response.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return decodeAPIResponse(method, data, out)
+}
+
+func (c *Client) callMultipartStream(ctx context.Context, method string, fields map[string]string, fileField string, document DocumentFile, out any) error {
+	reader, writer := io.Pipe()
+	multipartWriter := multipart.NewWriter(writer)
+	writeErr := make(chan error, 1)
+	go func() {
+		defer close(writeErr)
+		var err error
+		defer func() { _ = writer.CloseWithError(err); writeErr <- err }()
+		for key, value := range fields {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			if err = multipartWriter.WriteField(key, value); err != nil {
+				return
+			}
+		}
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField, escapeQuotes(document.Name)))
+		contentType := strings.TrimSpace(document.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		header.Set("Content-Type", contentType)
+		var part io.Writer
+		part, err = multipartWriter.CreatePart(header)
+		if err != nil {
+			return
+		}
+		if _, err = io.Copy(part, document.Reader); err != nil {
+			return
+		}
+		err = multipartWriter.Close()
+	}()
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/" + method
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
+	if err != nil {
+		_ = reader.Close()
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	httpClient := *c.http
+	httpClient.Timeout = 0
+	response, err := httpClient.Do(request)
+	if err != nil {
+		_ = reader.Close()
+		return err
+	}
+	defer response.Body.Close()
+	if streamErr := <-writeErr; streamErr != nil {
+		return streamErr
+	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
 		return err

@@ -78,14 +78,15 @@ func (s *Service) syncThreadPanel(ctx context.Context, threadID string) {
 }
 
 func (s *Service) syncThreadPanelToTarget(ctx context.Context, target model.ObserverTarget, threadID string, forceNew bool, sourceMode string) {
+	thread, snapshot, err := s.loadThreadPanelSnapshot(ctx, threadID)
+	if err != nil || thread == nil || snapshot == nil {
+		return
+	}
+	s.syncLeadAgentStatus(ctx, threadID, snapshot)
 	s.mu.RLock()
 	sender := s.sender
 	s.mu.RUnlock()
 	if sender == nil {
-		return
-	}
-	thread, snapshot, err := s.loadThreadPanelSnapshot(ctx, threadID)
-	if err != nil || thread == nil || snapshot == nil {
 		return
 	}
 	pending, _ := s.store.GetLatestPendingApprovalForThread(ctx, threadID)
@@ -612,8 +613,18 @@ func (s *Service) markTelegramOriginTurn(ctx context.Context, threadID, turnID s
 	return s.store.SetState(ctx, key, model.PanelSourceTelegramInput)
 }
 
-func (s *Service) markTelegramOriginTurnFromTelegram(ctx context.Context, threadID, turnID string, chatID, topicID int64) error {
+func (s *Service) markTelegramOriginTurnFromTelegram(ctx context.Context, threadID, turnID string, chatID, topicID int64, deliveryProtocolVersion int, deliveryNonce string) error {
 	err := s.markTelegramOriginTurn(ctx, threadID, turnID)
+	if err == nil {
+		err = s.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{
+			ThreadID:                threadID,
+			TurnID:                  turnID,
+			ChatID:                  chatID,
+			TopicID:                 topicID,
+			DeliveryProtocolVersion: deliveryProtocolVersion,
+			DeliveryNonce:           deliveryNonce,
+		})
+	}
 	s.logLifecycle("telegram_origin_turn_marked", lifecycleFields{
 		"chat_key":  model.ChatKey(chatID, topicID),
 		"thread_id": threadID,

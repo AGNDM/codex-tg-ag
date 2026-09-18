@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,121 @@ import (
 
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
+
+func TestLeadAgentPolicyMigrationDropsLegacyText(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE lead_agents (
+		agent_id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+		chat_id INTEGER NOT NULL, topic_id INTEGER NOT NULL, thread_id TEXT NOT NULL UNIQUE,
+		model TEXT NOT NULL, reasoning_effort TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL, policy TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		UNIQUE(chat_id, topic_id));
+		INSERT INTO lead_agents VALUES ('lead-old','Old',1,2,'thread-old','gpt-5.6-sol','medium','project-old','idle','free text','now','now');`)
+	if err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	_ = db.Close()
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	agent, err := store.GetLeadAgentByTopic(context.Background(), 1, 2)
+	if err != nil || agent == nil {
+		t.Fatalf("migrated agent = %#v err=%v", agent, err)
+	}
+	if agent.PolicyID != "" || agent.PolicyVersion != 0 {
+		t.Fatalf("migrated policy = %q v%d, want unapplied", agent.PolicyID, agent.PolicyVersion)
+	}
+	hasLegacy, err := store.hasColumn(context.Background(), "lead_agents", "policy")
+	if err != nil || hasLegacy {
+		t.Fatalf("legacy policy column remains=%v err=%v", hasLegacy, err)
+	}
+}
+
+func TestLeadAgentRegistryPersistsAndEnforcesIdentity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(%s) failed: %v", path, err)
+	}
+	ctx := context.Background()
+	agent := model.LeadAgent{
+		ID:              "lead-research",
+		Name:            "Research",
+		ChatID:          123456789,
+		TopicID:         42,
+		ThreadID:        "thread-research",
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "medium",
+		ProjectID:       "project-market-research",
+		Status:          "idle",
+		PolicyID:        "lead-default",
+		PolicyVersion:   1,
+	}
+	if err := store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatalf("CreateLeadAgent failed: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(reopened) failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	got, err := reopened.GetLeadAgentByTopic(ctx, agent.ChatID, agent.TopicID)
+	if err != nil {
+		t.Fatalf("GetLeadAgentByTopic failed: %v", err)
+	}
+	byName, err := reopened.GetLeadAgentByName(ctx, "research")
+	if err != nil {
+		t.Fatalf("GetLeadAgentByName failed: %v", err)
+	}
+	if byName == nil || byName.ID != agent.ID {
+		t.Fatalf("GetLeadAgentByName = %#v, want %s", byName, agent.ID)
+	}
+	if got == nil || got.ID != agent.ID || got.Model != "gpt-5.6-sol" || got.ProjectID != agent.ProjectID || got.PolicyID != agent.PolicyID || got.PolicyVersion != agent.PolicyVersion {
+		t.Fatalf("GetLeadAgentByTopic = %#v, want persisted agent %#v", got, agent)
+	}
+
+	duplicateTopic := agent
+	duplicateTopic.ID = "lead-builder"
+	duplicateTopic.Name = "Builder"
+	duplicateTopic.ThreadID = "thread-builder"
+	if err := reopened.CreateLeadAgent(ctx, duplicateTopic); err == nil {
+		t.Fatal("CreateLeadAgent with duplicate topic succeeded, want uniqueness error")
+	}
+
+	duplicateName := agent
+	duplicateName.ID = "lead-ops"
+	duplicateName.Name = "research"
+	duplicateName.TopicID = 43
+	duplicateName.ThreadID = "thread-ops"
+	if err := reopened.CreateLeadAgent(ctx, duplicateName); err == nil {
+		t.Fatal("CreateLeadAgent with case-insensitive duplicate name succeeded, want uniqueness error")
+	}
+
+	if err := reopened.UpdateLeadAgentProject(ctx, agent.ID, "project-telegram-agent"); err != nil {
+		t.Fatalf("UpdateLeadAgentProject failed: %v", err)
+	}
+	listed, err := reopened.ListLeadAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListLeadAgents failed: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ProjectID != "project-telegram-agent" {
+		t.Fatalf("ListLeadAgents = %#v, want one updated agent", listed)
+	}
+}
 
 func TestGlobalObserverTargetPersistsAndObserveOffDisablesMonitoring(t *testing.T) {
 	t.Parallel()

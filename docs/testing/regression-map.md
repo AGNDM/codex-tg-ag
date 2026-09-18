@@ -1,5 +1,58 @@
 # Regression Map
 
+## Agent File Delivery
+
+ADR: `docs/adr/ADR-022-agent-file-delivery.md`; feature brief is
+`docs/process/agent-telegram-file-delivery-brief.md`.
+
+Primary tests:
+
+- `internal/daemon/file_delivery_test.go::TestParseFileDeliveryFinalRequiresMatchingNonceAndStripsDirective`
+- `internal/daemon/file_delivery_test.go::TestParseFileDeliveryFinalV2OmitsNonceAndRejectsV1`
+- `internal/daemon/file_delivery_test.go::TestOpenProjectDeliveryFileEnforcesProjectBoundary`
+- `internal/daemon/file_delivery_linux_test.go::TestOpenProjectDeliveryFileRejectsFIFOWithoutBlocking`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesRequiresCompletedTurn`
+- `internal/storage/store_file_deliveries_test.go::TestClaimFileDeliveriesFreezesTurnAndDeduplicates`
+- `internal/storage/store_file_deliveries_test.go::TestRecoverSendingFileDeliveriesMarksUnknown`
+- `internal/storage/store_file_deliveries_test.go::TestPutTelegramTurnOriginKeepsFirstDestinationAndNonce`
+- `internal/storage/store_file_deliveries_test.go::TestOpenMigratesTelegramTurnOriginsToProtocolV1`
+- `internal/daemon/project_agent_policy_test.go::TestAdoptedProjectAgentPolicyRequiresExactRegularRootMarker`
+- `internal/daemon/service_test.go::TestAdoptedProjectPolicyUsesShortLeadMarkerAndFileV2`
+- `internal/telegram/api_test.go::TestClientSendDocumentStreamsReader`
+
+Contract notes:
+
+- Only completed Telegram-originated turns may request delivery. Protocol v1
+  additionally requires its per-turn nonce; protocol v2 is selected only for a
+  newly created turn in a Project with the exact `project-v1` marker.
+- Paths stay inside the bound Project, protected paths are rejected, and each
+  regular file is limited to the cloud Bot API's 50 MB document limit.
+- Claims are durable before upload; sent files are not repeated, while ambiguous
+  interrupted uploads become `unknown` and are not retried automatically.
+- Live Telegram validation must cover a successful send, a rejected path, and a
+  repeated panel refresh without duplicate delivery.
+
+## Telegram Document Input
+
+Primary tests:
+
+- `internal/telegram/api_test.go::TestMessageDecodesDocumentCaptionAndReplyDocument`
+- `internal/telegram/api_test.go::TestClientDownloadFileRejectsBodyOverMax`
+- `internal/telegram/bot_test.go::TestCaptionDocumentDispatchesOnce`
+- `internal/telegram/bot_test.go::TestBareDocumentPromptsWithoutDownload`
+- `internal/telegram/bot_test.go::TestTextReplyToDocumentDispatchesOnce`
+- `internal/telegram/bot_test.go::TestOversizeDocumentNeverDispatches`
+- `internal/telegram/bot_test.go::TestUnauthorizedDocumentDoesNotDownload`
+- `internal/daemon/service_test.go::TestHandleDocumentSavesSafeProjectRelativePath`
+- `internal/daemon/service_test.go::TestHandleDocumentRejectsInvalidCWDBeforeAppServer`
+- `internal/daemon/service_test.go::TestHandleDocumentRejectsUploadSymlinkOutsideProject`
+
+Contract notes:
+
+- A captioned document or text reply to a document is one input; a bare document only prompts for a reply.
+- Downloads and writes stay inside the routed Project and failures never call App Server.
+
 This map is the handoff index for agents changing Codex control-plane
 contracts, Telegram routing, observer panels, lifecycle recovery, diagnostics,
 or Plan Mode.
@@ -171,6 +224,31 @@ Contract notes:
 - Telegram must not accept arbitrary local filesystem paths for thread creation.
 - The first prompt is required; create-only threads are out of scope for this slice.
 
+## Durable Lead Policy
+
+ADRs: `docs/adr/ADR-020-native-lead-policy.md` and
+`docs/adr/ADR-021-model-neutral-leads.md`; feature brief is
+`docs/process/big-agent-registry-brief.md`.
+
+Primary tests:
+
+- `internal/leadpolicy/policy_test.go::TestPolicyUsesNativeAgentsWithModelNeutralLead`
+- `internal/appserver/client_test.go::TestTurnStartParamsIncludesOrdinaryTurnModelOverride`
+- `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
+- `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
+- `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`
+- `internal/daemon/service_test.go::TestCurrentLeadPolicyAddsRuntimeReminder`
+- `internal/daemon/service_test.go::TestLeadAgentModelAndLifecycleStatus`
+
+Contract notes:
+
+- Codex native subagent tools own spawn, wait, steering, and result consolidation.
+- The daemon stores a policy id/version, not mutable free-form policy text.
+- `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
+- Lead Policy v3 identifies the environment and durable context, keeps Sol medium as the creation default, and permits any model currently advertised by App Server.
+- Telegram-started Lead turns explicitly restore Codex `workspaceWrite` for the bound Project root with `on-request` plus `auto_review`, so a sticky read-only audit turn cannot block later edits; ordinary threads are not broadened.
+- The persistent lead remains the only operator-facing agent; its configured model may be changed without changing Lead identity.
+
 ## Full Thread ID Access
 
 ADR: `docs/adr/ADR-007-parallel-thread-visual-identity.md`
@@ -286,6 +364,7 @@ Primary tests:
 - `internal/daemon/terminal_gate_test.go::TestTelegramEmptyInterruptedGateDefersAndKeepsHotPollingMetadata`
 - `internal/daemon/terminal_gate_test.go::TestTelegramEmptyInterruptedGateRecoversAndClearsDefer`
 - `internal/daemon/terminal_gate_test.go::TestTelegramEmptyInterruptedGateGraceExpiryAccepts`
+- `internal/daemon/terminal_gate_test.go::TestTelegramInterruptedGateKeepsDeadlineAcrossInconclusiveRead`
 - `internal/daemon/terminal_gate_test.go::TestTelegramEmptyInterruptedGateExplicitInterruptBypassesDefer`
 - `internal/daemon/terminal_gate_test.go::TestTelegramFinalInterruptedGateDefersUntilRecovered`
 - `internal/daemon/terminal_gate_test.go::TestTelegramPartialInterruptedGateDefersUntilFinalOrGrace`
@@ -295,6 +374,8 @@ Primary tests:
 - `internal/daemon/service_test.go::TestTelegramOriginHotPollCapturesRunningTool`
 - `internal/daemon/service_test.go::TestLiveToolNotificationIgnoresOlderTurnAfterNewerCompletion`
 - `internal/daemon/service_test.go::TestRefreshThreadForOperationDefersEmptyInterrupted`
+- `internal/daemon/service_test.go::TestInputDuringInterruptedGraceIsNotSubmitted`
+- `internal/daemon/service_test.go::TestExpiredInterruptedGraceClearsActiveTurnWithoutRearming`
 
 Live E2E:
 
@@ -306,6 +387,8 @@ Live E2E:
 Contract notes:
 
 - Implicit Telegram-origin `interrupted` is ambiguous until it recovers, expires, or follows explicit `/stop`.
+- Deferred `interrupted` preserves the live UI but does not permit `turn/steer`; the operator receives an explicit not-submitted response.
+- Expiry clears the matching stale active-turn identity and remains accepted across repeated refreshes and terminal logging.
 - Deferred terminal state must not collapse the live panel into a false Final Card.
 - The daemon must keep polling deferred turns hot.
 - Telegram-origin turns get a short App Server `thread/read` hot-poll window after start so `[Tool]` can become visible even when live events do not expose the running command.

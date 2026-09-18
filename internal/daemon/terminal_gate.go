@@ -223,6 +223,32 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 	}
 	if !deferrableInterrupted {
 		if hasExisting {
+			if !interruptedSnapshotHasExplicitLifecycleEvidence(snapshot) {
+				firstSeenAt := parseTime(existing.FirstSeenAt)
+				expiresAt := parseTime(existing.ExpiresAt)
+				decision.FirstSeenAt = firstSeenAt
+				decision.LastSeenAt = now
+				decision.ExpiresAt = expiresAt
+				existing.LastSeenAt = model.TimeString(now.Format(time.RFC3339Nano))
+				if !expiresAt.IsZero() && !now.Before(expiresAt) {
+					decision.Action = terminalGateAccept
+					decision.Reason = "grace_expired"
+					existing.LastDecision = string(terminalGateAccept)
+					existing.LastReason = decision.Reason
+				} else {
+					decision.Action = terminalGateDefer
+					decision.Reason = "inconclusive_snapshot"
+					decision.HotPoll = true
+					decision.NextPollAfter = terminalGateNextPollAfter(now, s.cfg.ObserverPollInterval)
+					existing.NextPollAfter = decision.NextPollAfter
+					existing.LastDecision = string(terminalGateDefer)
+					existing.LastReason = decision.Reason
+				}
+				if err := s.saveTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID, existing); err != nil {
+					return decision, err
+				}
+				return decision, nil
+			}
 			_ = s.clearTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID)
 			decision.Action = terminalGateRecover
 			decision.Reason = "snapshot_recovered"
@@ -304,6 +330,23 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 	return decision, nil
 }
 
+func interruptedSnapshotHasExplicitLifecycleEvidence(snapshot *appserver.ThreadReadSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	if snapshot.WaitingOnApproval || snapshot.WaitingOnReply || snapshotHasFinalSignal(snapshot) {
+		return true
+	}
+	status := strings.ToLower(strings.TrimSpace(snapshot.LatestTurnStatus))
+	if isTerminalStatus(status) {
+		return true
+	}
+	return status == "inprogress" ||
+		strings.Contains(status, "active") ||
+		strings.Contains(status, "waiting") ||
+		strings.Contains(status, "running")
+}
+
 func applyTerminalGateHotPolling(snapshot *model.ThreadSnapshotState, decision terminalGateDecision) {
 	if snapshot == nil || !decision.HotPoll || strings.TrimSpace(string(decision.NextPollAfter)) == "" {
 		return
@@ -348,6 +391,7 @@ func (s *Service) applyTelegramOriginTerminalGate(ctx context.Context, operation
 		s.logLifecycle("telegram_origin_terminal_recovered", fields)
 	case terminalGateAccept:
 		if decision.DeferrableInterrupted && decision.Reason == "grace_expired" {
+			normalizeAcceptedInterruptedThread(current)
 			fields := snapshotDiagnosticFields(*current)
 			fields["operation"] = operation
 			fields["reason"] = decision.Reason
@@ -357,6 +401,37 @@ func (s *Service) applyTelegramOriginTerminalGate(ctx context.Context, operation
 		}
 	}
 	return false
+}
+
+func normalizeAcceptedInterruptedThread(snapshot *appserver.ThreadReadSnapshot) {
+	if snapshot == nil || !strings.EqualFold(strings.TrimSpace(snapshot.LatestTurnStatus), "interrupted") {
+		return
+	}
+	latestTurnID := strings.TrimSpace(snapshot.LatestTurnID)
+	activeTurnID := strings.TrimSpace(snapshot.Thread.ActiveTurnID)
+	if latestTurnID == "" || (activeTurnID != "" && activeTurnID != latestTurnID) {
+		return
+	}
+	snapshot.Thread.ActiveTurnID = ""
+	snapshot.Thread.Status = "interrupted"
+}
+
+func (s *Service) interruptedTurnInputDecision(ctx context.Context, threadID, turnID string, now time.Time) (terminalGateDecisionKind, time.Time, bool) {
+	state, ok, err := s.loadTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID, now)
+	if err != nil || !ok {
+		return "", time.Time{}, false
+	}
+	expiresAt := parseTime(state.ExpiresAt)
+	if state.LastDecision == string(terminalGateAccept) && state.LastReason == "grace_expired" {
+		return terminalGateAccept, expiresAt, true
+	}
+	if !expiresAt.IsZero() && !now.Before(expiresAt) {
+		return terminalGateAccept, expiresAt, true
+	}
+	if state.LastDecision == string(terminalGateDefer) {
+		return terminalGateDefer, expiresAt, true
+	}
+	return "", expiresAt, false
 }
 
 func (s *Service) threadHasDeferredEmptyInterrupted(ctx context.Context, thread model.Thread, snapshot *model.ThreadSnapshotState) bool {

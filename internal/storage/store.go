@@ -91,6 +91,23 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS lead_agents (
+		agent_id TEXT PRIMARY KEY,
+		name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL,
+		thread_id TEXT NOT NULL UNIQUE,
+		model TEXT NOT NULL,
+		reasoning_effort TEXT NOT NULL,
+		project_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		policy_id TEXT NOT NULL DEFAULT '',
+		policy_version INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE(chat_id, topic_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS observer_targets (
 		chat_key TEXT PRIMARY KEY,
 		chat_id INTEGER NOT NULL,
@@ -215,9 +232,37 @@ func (s *Store) initialize(ctx context.Context) error {
 		updated_at TEXT NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS telegram_turn_origins (
+		thread_id TEXT NOT NULL,
+		turn_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL DEFAULT 0,
+		delivery_nonce TEXT NOT NULL,
+		delivery_protocol_version INTEGER NOT NULL DEFAULT 1,
+		final_fp TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(thread_id, turn_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS file_deliveries (
+		thread_id TEXT NOT NULL,
+		turn_id TEXT NOT NULL,
+		directive_index INTEGER NOT NULL,
+		file_path TEXT NOT NULL,
+		caption TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		message_id INTEGER NOT NULL DEFAULT 0,
+		error_text TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(thread_id, turn_id, directive_index)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_threads_project_updated_at ON threads(project_name, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_bindings_thread_id ON thread_bindings(thread_id);
+	CREATE INDEX IF NOT EXISTS idx_lead_agents_updated_at ON lead_agents(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_observer_targets_enabled_updated_at ON observer_targets(enabled, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_delivery_queue_status_available_at ON delivery_queue(status, available_at);
 	CREATE INDEX IF NOT EXISTS idx_pending_approvals_status_updated_at ON pending_approvals(status, updated_at DESC);
@@ -226,6 +271,32 @@ func (s *Store) initialize(ctx context.Context) error {
 	`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
+	}
+	if err := s.ensureColumn(ctx, "lead_agents", "project_id", `ALTER TABLE lead_agents ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if legacyProject, err := s.hasColumn(ctx, "lead_agents", "project"); err != nil {
+		return err
+	} else if legacyProject {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE lead_agents DROP COLUMN project`); err != nil {
+			return fmt.Errorf("drop legacy lead project label: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_agents_project_id ON lead_agents(project_id) WHERE project_id <> ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "lead_agents", "policy_id", `ALTER TABLE lead_agents ADD COLUMN policy_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "lead_agents", "policy_version", `ALTER TABLE lead_agents ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if legacyPolicy, err := s.hasColumn(ctx, "lead_agents", "policy"); err != nil {
+		return err
+	} else if legacyPolicy {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE lead_agents DROP COLUMN policy`); err != nil {
+			return fmt.Errorf("drop legacy lead policy text: %w", err)
+		}
 	}
 	if err := s.ensureColumn(ctx, "thread_panels", "source_mode", `ALTER TABLE thread_panels ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'explicit'`); err != nil {
 		return err
@@ -255,6 +326,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "thread_panels", "last_final_card_hash", `ALTER TABLE thread_panels ADD COLUMN last_final_card_hash TEXT`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "telegram_turn_origins", "delivery_protocol_version", `ALTER TABLE telegram_turn_origins ADD COLUMN delivery_protocol_version INTEGER NOT NULL DEFAULT 1`); err != nil {
 		return err
 	}
 	return nil

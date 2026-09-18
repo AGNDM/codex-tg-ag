@@ -1,5 +1,47 @@
 # AGENTS
 
+Codex-TG Project Agent Policy: project-v1
+
+## Project Agent Policy
+
+These rules apply to every Agent working in this Project. An Agent designated
+as the persistent Lead owns operator communication, planning, delegation,
+verification, and final reporting. Other Agents remain bounded contributors:
+they return evidence and file paths to their parent and do not present
+themselves as the operator-facing Lead.
+
+- Use Codex native subagents rather than building another scheduler or model
+  loop. Use `luna_executor` for bounded routine execution and
+  `astra_advisor` for read-only architecture, uncertainty, or high-risk review.
+- Conserve local server resources. Prefer one subagent, focused output, and
+  proportionate checks; use two only when independent parallel work saves time.
+- Before push, merge, deployment, production or external-system mutation,
+  spending, destructive deletion, credential or permission changes, or another
+  hard-to-reverse action, the Lead must present the concrete action and obtain
+  explicit operator direction. A subagent cannot expand that authority.
+- Review delegated evidence before accepting it. Report changed systems,
+  checks, remaining risks, and decisions still required.
+- These behavioral rules do not replace sandboxing, tool approvals, Telegram
+  routing, Linux permissions, or other programmatic enforcement.
+
+When the current Telegram turn advertises `file=v2`, an Agent may request files
+from this Project be delivered to the saved Telegram destination, but only when
+the operator explicitly asks. Append exactly one top-level fenced block named
+`codex-tg-file` to the completed final answer:
+
+````text
+```codex-tg-file
+{"version":2,"files":[{"path":"relative/path","caption":"optional"}]}
+```
+````
+
+Use one to three Project-relative paths. Do not include chat, topic, thread, or
+turn identifiers. A top-level block is executable intent: when explaining or
+quoting the protocol, keep the example inside an outer ordinary code fence so
+it cannot execute. Say only that delivery was submitted; the bridge reports the
+actual result. Native subagents without a Telegram turn should return paths to
+their parent Lead instead of emitting the block.
+
 Purpose: help AI agents work on `codex-tg` without increasing complexity or weakening the operator-facing Telegram control loop.
 
 Good code is code that is easy to understand, change, test, and safely extend. Good agent work is evidence-backed, small in scope, and validated through the same surfaces the operator uses.

@@ -1,0 +1,115 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	"github.com/mideco-tech/codex-tg/internal/model"
+)
+
+func TestClaimFileDeliveriesFreezesTurnAndDeduplicates(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	origin := model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 42, TopicID: 9, DeliveryNonce: "nonce-1"}
+	if err := store.PutTelegramTurnOrigin(ctx, origin); err != nil {
+		t.Fatal(err)
+	}
+	requests := []model.FileDelivery{{DirectiveIndex: 0, FilePath: "reports/a.pdf", Caption: "A"}}
+
+	claimed, err := store.ClaimFileDeliveries(ctx, "thread-1", "turn-1", "final-fp", requests)
+	if err != nil || len(claimed) != 1 || claimed[0].Status != model.FileDeliverySending {
+		t.Fatalf("claimed = %#v, err = %v", claimed, err)
+	}
+	claimed, err = store.ClaimFileDeliveries(ctx, "thread-1", "turn-1", "final-fp", requests)
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("replay claimed = %#v, err = %v", claimed, err)
+	}
+	if _, err := store.ClaimFileDeliveries(ctx, "thread-1", "turn-1", "changed-final", append(requests, model.FileDelivery{DirectiveIndex: 1, FilePath: "b.pdf"})); err == nil {
+		t.Fatal("ClaimFileDeliveries accepted a changed final for a frozen turn")
+	}
+}
+
+func TestOpenMigratesTelegramTurnOriginsToProtocolV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE telegram_turn_origins (
+		thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, chat_id INTEGER NOT NULL,
+		topic_id INTEGER NOT NULL DEFAULT 0, delivery_nonce TEXT NOT NULL,
+		final_fp TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY(thread_id, turn_id));
+		INSERT INTO telegram_turn_origins VALUES('thread-old','turn-old',42,9,'legacy','','now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := store.GetTelegramTurnOrigin(context.Background(), "thread-old", "turn-old")
+	if err != nil || origin == nil || origin.DeliveryProtocolVersion != 1 || origin.DeliveryNonce != "legacy" {
+		t.Fatalf("origin = %#v, err = %v", origin, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatalf("second Open failed: %v", err)
+	}
+	defer store.Close()
+	origin, err = store.GetTelegramTurnOrigin(context.Background(), "thread-old", "turn-old")
+	if err != nil || origin == nil || origin.DeliveryProtocolVersion != 1 {
+		t.Fatalf("origin after second Open = %#v, err = %v", origin, err)
+	}
+}
+
+func TestRecoverSendingFileDeliveriesMarksUnknown(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 42, DeliveryNonce: "nonce-1"}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimFileDeliveries(ctx, "thread-1", "turn-1", "final-fp", []model.FileDelivery{{DirectiveIndex: 0, FilePath: "a.pdf"}})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed = %#v, err = %v", claimed, err)
+	}
+	if err := store.RecoverSendingFileDeliveries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ListFileDeliveries(ctx, "thread-1", "turn-1")
+	if err != nil || len(got) != 1 || got[0].Status != model.FileDeliveryUnknown {
+		t.Fatalf("deliveries = %#v, err = %v", got, err)
+	}
+}
+
+func TestPutTelegramTurnOriginKeepsFirstDestinationAndNonce(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 42, TopicID: 9, DeliveryProtocolVersion: 1, DeliveryNonce: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread-1", TurnID: "turn-1", ChatID: 99, TopicID: 10, DeliveryProtocolVersion: 2, DeliveryNonce: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := store.GetTelegramTurnOrigin(ctx, "thread-1", "turn-1")
+	if err != nil || origin == nil || origin.ChatID != 42 || origin.TopicID != 9 || origin.DeliveryProtocolVersion != 1 || origin.DeliveryNonce != "first" {
+		t.Fatalf("origin = %#v, err = %v", origin, err)
+	}
+}

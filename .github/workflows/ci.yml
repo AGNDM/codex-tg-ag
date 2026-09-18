@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -37,3 +38,18 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build -buildvcs=false ./...
+      - name: Build Linux deployment artifact
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -buildvcs=false -o dist/ctr-go-linux-amd64 ./cmd/ctr-go
+      - name: Upload Linux deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctr-go-linux-amd64-${{ github.sha }}
+          path: dist/ctr-go-linux-amd64
+          if-no-files-found: error
+          retention-days: 7

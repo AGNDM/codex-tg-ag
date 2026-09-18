@@ -303,7 +303,6 @@ func (s *Service) maybeLogTelegramOriginTerminal(ctx context.Context, snapshot a
 	fields["chat_source"] = model.PanelSourceTelegramInput
 	s.logLifecycle("telegram_origin_turn_terminal", fields)
 	_ = s.store.SetState(ctx, key, string(model.NowString()))
-	_ = s.clearTelegramOriginEmptyInterruptedDefer(ctx, threadID, turnID)
 }
 
 func snapshotDiagnosticFields(snapshot appserver.ThreadReadSnapshot) lifecycleFields {

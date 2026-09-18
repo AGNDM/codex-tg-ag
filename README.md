@@ -68,6 +68,7 @@ future adapters can consume the same Codex control core.
 - SQLite-backed durable state for bindings, routes, callbacks, observer target, panels, and delivery metadata.
 - macOS service installer with friendly first-run setup, user LaunchAgent management, and menu bar tray control.
 - v0.5 architecture direction: adapter-independent Codex Control Plane for router agents, voice adapters, and local private APIs.
+- Persistent Telegram Lead Agents default to Sol medium and can use any model currently advertised by Codex without changing their thread or Project identity.
 - Cross-platform Go daemon foundation for Windows, macOS, and Linux.
 
 ## Platform Status
@@ -173,6 +174,7 @@ go run ./cmd/ctr-go daemon run
 Telegram commands:
 
 - `/start`, `/help`
+- `/agents`, `/agent create`, `/agent show`, `/agent project`, `/agent model`, `/agent policy`
 - `/threads`, `/projects`, `/new`, `/newchat`, `/newthread`, `/show`, `/bind`, `/reply`, `/plan`
 - `/settings`, `/model`, `/effort`
 - `/context`, `/whereami`

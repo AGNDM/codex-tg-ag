@@ -171,6 +171,30 @@ type ThreadBinding struct {
 	UpdatedAt TimeString
 }
 
+type LeadAgent struct {
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	ChatID          int64      `json:"chat_id"`
+	TopicID         int64      `json:"topic_id"`
+	ThreadID        string     `json:"thread_id"`
+	Model           string     `json:"model"`
+	ReasoningEffort string     `json:"reasoning_effort"`
+	ProjectID       string     `json:"project_id,omitempty"`
+	Status          string     `json:"status"`
+	PolicyID        string     `json:"policy_id"`
+	PolicyVersion   int        `json:"policy_version"`
+	CreatedAt       TimeString `json:"created_at"`
+	UpdatedAt       TimeString `json:"updated_at"`
+}
+
+// CodexProject is the project identity owned by Codex App Server. Roots are
+// supplied by Codex and are not inferred from cached thread working directories.
+type CodexProject struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Roots []string `json:"roots"`
+}
+
 type ObserverTarget struct {
 	ChatKey   string
 	ChatID    int64
@@ -270,6 +294,38 @@ type DeliveryAttempt struct {
 	Status    string
 	ErrorText string
 	CreatedAt TimeString
+}
+
+const (
+	FileDeliverySending = "sending"
+	FileDeliverySent    = "sent"
+	FileDeliveryFailed  = "failed"
+	FileDeliveryUnknown = "unknown"
+)
+
+type TelegramTurnOrigin struct {
+	ThreadID                string
+	TurnID                  string
+	ChatID                  int64
+	TopicID                 int64
+	DeliveryProtocolVersion int
+	DeliveryNonce           string
+	FinalFP                 string
+	CreatedAt               TimeString
+	UpdatedAt               TimeString
+}
+
+type FileDelivery struct {
+	ThreadID       string
+	TurnID         string
+	DirectiveIndex int
+	FilePath       string
+	Caption        string
+	Status         string
+	MessageID      int64
+	ErrorText      string
+	CreatedAt      TimeString
+	UpdatedAt      TimeString
 }
 
 type ButtonSpec struct {

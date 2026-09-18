@@ -13,6 +13,10 @@ type TurnStartOptions struct {
 	CollaborationMode string
 	Model             string
 	ReasoningEffort   string
+	SandboxMode       string
+	WritableRoots     []string
+	ApprovalPolicy    string
+	ApprovalsReviewer string
 }
 
 type ModelOption struct {
@@ -55,6 +59,11 @@ type Threads interface {
 	ThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error)
 	ThreadResume(ctx context.Context, threadID, cwd string) (map[string]any, error)
 	ThreadStart(ctx context.Context, cwd string) (map[string]any, error)
+}
+
+type Projects interface {
+	ProjectList(ctx context.Context, limit int, cursor string) (map[string]any, error)
+	ThreadProjectUpdate(ctx context.Context, threadID, projectID string) (map[string]any, error)
 }
 
 type ThreadAdmin interface {
@@ -101,6 +110,7 @@ type RuntimeSession interface {
 	Turns
 	ServerRequests
 	Models
+	Projects
 	Diagnostics
 }
 
