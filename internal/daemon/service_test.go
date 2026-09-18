@@ -3203,10 +3203,10 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	idleThread := thread
-	idleThread.Status = "idle"
+	idleThread.Status = "completed"
 	idleThread.ActiveTurnID = ""
 	stub := &stubSession{
-		threadReads:  map[string]map[string]any{thread.ID: diagnosticThreadReadPayload(idleThread, "", "completed")},
+		threadReads:  map[string]map[string]any{thread.ID: diagnosticThreadReadPayload(idleThread, thread.ActiveTurnID, "completed")},
 		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
 	}
 	service.live = stub
