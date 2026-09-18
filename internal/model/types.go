@@ -304,14 +304,15 @@ const (
 )
 
 type TelegramTurnOrigin struct {
-	ThreadID      string
-	TurnID        string
-	ChatID        int64
-	TopicID       int64
-	DeliveryNonce string
-	FinalFP       string
-	CreatedAt     TimeString
-	UpdatedAt     TimeString
+	ThreadID                string
+	TurnID                  string
+	ChatID                  int64
+	TopicID                 int64
+	DeliveryProtocolVersion int
+	DeliveryNonce           string
+	FinalFP                 string
+	CreatedAt               TimeString
+	UpdatedAt               TimeString
 }
 
 type FileDelivery struct {

@@ -11,16 +11,18 @@ as an unrestricted local-file command.
 
 ## Decision
 
-For Telegram-originated turns, the bridge adds a random per-turn nonce and a
-small final-answer protocol instruction to the App Server input. The Agent may
-request at most three deliveries in one standalone `codex-tg-file` JSON block.
+Projects that declare `Codex-TG Project Agent Policy: project-v1` as an exact
+line in their root `AGENTS.md` use protocol v2. Its static instructions live in
+that Project file and the bridge adds only a short capability marker. The Agent
+may request at most three deliveries in one standalone `codex-tg-file` JSON block.
 The bridge removes that block from the visible Final Card and processes it only
-after the turn is terminal.
+after the turn is completed.
 
 Delivery is allowed only when all of these checks pass:
 
-- the turn has a persisted Telegram chat/topic origin and the nonce matches;
-- the protocol version and JSON fields are exact;
+- the turn has a persisted Telegram chat/topic origin;
+- the block version exactly matches the protocol frozen for that turn;
+- legacy protocol v1 turns also match their persisted nonce;
 - each path is relative to the turn's Project root and cannot escape it;
 - the opened target is a regular file and protected runtime, credential, Git,
   SQLite, session, and environment paths are rejected;
@@ -46,3 +48,10 @@ copy protected content into an allowed file. Upload remains synchronous with
 Final Card processing and may delay observer updates for the duration of a large
 transfer; a queue is deferred until live use shows that added complexity is
 needed.
+
+Protocol v1 remains available for Projects without the adoption marker and for
+turns created before migration. Protocol v2 removes the nonce because routing,
+authority, replay protection, and delivery identity already come from the saved
+Telegram origin, App Server thread and turn, terminal status, final fingerprint,
+and atomic claim. This accepts the narrow risk that a model could copy an old
+v2 top-level block into another eligible Telegram turn and cause another delivery.

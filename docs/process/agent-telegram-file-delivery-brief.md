@@ -1,6 +1,6 @@
 # Agent To Telegram File Delivery
 
-Status: planning.
+Status: implemented; protocol v2 migration in progress.
 
 ## Goal
 
@@ -17,18 +17,19 @@ durable identity.
 
 ## Proposed First Slice
 
-- Each eligible Telegram turn receives a random delivery nonce in its Agent
-  instructions. An Agent requests delivery with one top-level, standalone,
-  machine-readable control block in its completed final response. The block
-  contains a protocol version, the matching turn nonce, and up to three file
-  entries. Unknown or missing fields make the request invalid.
+- A Project with the exact `project-v1` marker in its root `AGENTS.md` documents
+  nonce-free protocol v2 and receives only a short runtime capability marker.
+  An Agent requests delivery with one top-level, standalone, machine-readable
+  control block containing the protocol version and up to three file entries.
+  Projects and in-flight turns that have not migrated retain protocol v1 and
+  its per-turn nonce. Unknown or missing fields make the request invalid.
 - The bridge parses only that complete block; it never
   interprets natural-language requests, Markdown links, tool output, or
   `fileChange` events as delivery instructions.
 - Each request contains one Project-relative path and an optional short
   caption. Multiple files require multiple explicit entries with a small cap.
-- The bridge removes valid control blocks from the rendered final text, sends
-  each accepted file through the existing in-memory `SendDocumentData` path,
+- The bridge removes valid control blocks from the rendered final text, streams
+  each accepted file through Telegram multipart upload,
   and records delivery state so snapshot replay cannot resend it. An invalid
   dedicated block remains visible as a short delivery validation error rather
   than disappearing silently.
@@ -94,8 +95,8 @@ security and deduplication rules.
 4. A directive cannot choose another destination, and a non-Telegram turn
    cannot deliver.
 5. Definite failure and unknown timeout produce clear, stable delivery state.
-6. Nonce mismatch, quoted examples, ordinary code fences, Markdown links, paths
-   in prose, and `fileChange` events never trigger delivery.
+6. Protocol mismatch, v1 nonce mismatch, quoted examples, ordinary code fences,
+   Markdown links, paths in prose, and `fileChange` events never trigger delivery.
 
 Live validation creates a file containing a random nonce, asks the Agent to
 send it, downloads it from Telegram, verifies the nonce, and replies to the

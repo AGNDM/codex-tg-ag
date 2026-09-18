@@ -17,6 +17,11 @@ import (
 
 const maxTelegramDocumentBytes int64 = 50_000_000
 
+type fileDeliveryProtocol struct {
+	Version int
+	Nonce   string
+}
+
 func withFileDeliveryInstructions(text, nonce string) string {
 	return strings.TrimSpace(text) + "\n\n[Codex Telegram file delivery]\n" +
 		"If the operator explicitly asks you to send a Project file to Telegram, append one top-level fenced block named codex-tg-file to your final answer. " +
@@ -24,17 +29,37 @@ func withFileDeliveryInstructions(text, nonce string) string {
 		"Do not use this block merely to explain or quote the protocol. Say that you submitted delivery; the bridge reports the actual result."
 }
 
-func (s *Service) fileDeliveryPromptForTurn(ctx context.Context, threadID, turnID, text, fallbackNonce string) (string, string) {
-	nonce := fallbackNonce
-	if origin, err := s.store.GetTelegramTurnOrigin(ctx, threadID, turnID); err == nil && origin != nil && strings.TrimSpace(origin.DeliveryNonce) != "" {
-		nonce = origin.DeliveryNonce
+func withFileDeliveryProtocol(text string, protocol fileDeliveryProtocol, role string) string {
+	if protocol.Version == 2 {
+		return projectRuntimePrompt(text, role)
 	}
-	return withFileDeliveryInstructions(text, nonce), nonce
+	return withFileDeliveryInstructions(text, protocol.Nonce)
+}
+
+func (s *Service) fileDeliveryPromptForTurn(ctx context.Context, threadID, turnID, projectText, legacyText, role string) (string, fileDeliveryProtocol) {
+	protocol := fileDeliveryProtocol{Version: 1, Nonce: randomToken()}
+	if origin, err := s.store.GetTelegramTurnOrigin(ctx, threadID, turnID); err == nil && origin != nil {
+		protocol.Version = origin.DeliveryProtocolVersion
+		protocol.Nonce = origin.DeliveryNonce
+	}
+	if protocol.Version != 2 && strings.TrimSpace(protocol.Nonce) == "" {
+		protocol.Nonce = randomToken()
+	}
+	text := legacyText
+	if protocol.Version == 2 {
+		text = projectText
+	}
+	return withFileDeliveryProtocol(text, protocol, role), protocol
 }
 
 type fileDeliveryDirective struct {
 	Version int                   `json:"version"`
-	Nonce   string                `json:"nonce"`
+	Files   []fileDeliveryRequest `json:"files"`
+}
+
+type fileDeliveryWireDirective struct {
+	Version int                   `json:"version"`
+	Nonce   json.RawMessage       `json:"nonce"`
 	Files   []fileDeliveryRequest `json:"files"`
 }
 
@@ -43,7 +68,7 @@ type fileDeliveryRequest struct {
 	Caption string `json:"caption,omitempty"`
 }
 
-func parseFileDeliveryFinal(text, expectedNonce string) (string, *fileDeliveryDirective, error) {
+func parseFileDeliveryFinal(text string, protocol fileDeliveryProtocol) (string, *fileDeliveryDirective, error) {
 	const open = "```codex-tg-file\n"
 	const close = "\n```"
 	lines := strings.Split(text, "\n")
@@ -82,20 +107,27 @@ func parseFileDeliveryFinal(text, expectedNonce string) (string, *fileDeliveryDi
 	body := strings.Join(lines[start+1:end], "\n")
 	decoder := json.NewDecoder(bytes.NewBufferString(body))
 	decoder.DisallowUnknownFields()
-	var directive fileDeliveryDirective
-	if err := decoder.Decode(&directive); err != nil {
+	var wire fileDeliveryWireDirective
+	if err := decoder.Decode(&wire); err != nil {
 		return text, nil, fmt.Errorf("invalid file delivery JSON: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return text, nil, errors.New("file delivery block contains trailing JSON")
 	}
-	if directive.Version != 1 {
+	if wire.Version != protocol.Version || (wire.Version != 1 && wire.Version != 2) {
 		return text, nil, errors.New("unsupported file delivery protocol version")
 	}
-	if strings.TrimSpace(expectedNonce) == "" || directive.Nonce != expectedNonce {
-		return text, nil, errors.New("file delivery nonce does not match this turn")
+	if wire.Version == 2 && wire.Nonce != nil {
+		return text, nil, errors.New("file delivery protocol v2 does not accept a nonce")
 	}
+	var nonce string
+	if wire.Version == 1 {
+		if wire.Nonce == nil || json.Unmarshal(wire.Nonce, &nonce) != nil || strings.TrimSpace(protocol.Nonce) == "" || nonce != protocol.Nonce {
+			return text, nil, errors.New("file delivery nonce does not match this turn")
+		}
+	}
+	directive := fileDeliveryDirective{Version: wire.Version, Files: wire.Files}
 	if len(directive.Files) == 0 || len(directive.Files) > 3 {
 		return text, nil, errors.New("file delivery requires between one and three files")
 	}
@@ -219,10 +251,11 @@ func (s *Service) processFinalFileDeliveries(ctx context.Context, sender Sender,
 		return visible
 	}
 	origin, err := s.store.GetTelegramTurnOrigin(ctx, thread.ID, snapshot.LatestTurnID)
-	if err != nil || origin == nil || strings.TrimSpace(origin.DeliveryNonce) == "" {
+	if err != nil || origin == nil {
 		return visible
 	}
-	parsedVisible, directive, parseErr := parseFileDeliveryFinal(visible, origin.DeliveryNonce)
+	protocol := fileDeliveryProtocol{Version: origin.DeliveryProtocolVersion, Nonce: origin.DeliveryNonce}
+	parsedVisible, directive, parseErr := parseFileDeliveryFinal(visible, protocol)
 	if parseErr != nil {
 		return appendDeliveryStatus(visible, "File delivery request invalid: "+parseErr.Error())
 	}
@@ -273,7 +306,8 @@ func (s *Service) renderFileDeliveryResult(ctx context.Context, threadID, turnID
 	visible := strings.TrimSpace(finalText)
 	origin, err := s.store.GetTelegramTurnOrigin(ctx, threadID, turnID)
 	if err == nil && origin != nil {
-		if stripped, directive, parseErr := parseFileDeliveryFinal(visible, origin.DeliveryNonce); parseErr == nil && directive != nil {
+		protocol := fileDeliveryProtocol{Version: origin.DeliveryProtocolVersion, Nonce: origin.DeliveryNonce}
+		if stripped, directive, parseErr := parseFileDeliveryFinal(visible, protocol); parseErr == nil && directive != nil {
 			visible = stripped
 		}
 	}

@@ -13,23 +13,30 @@ import (
 func (s *Store) PutTelegramTurnOrigin(ctx context.Context, origin model.TelegramTurnOrigin) error {
 	now := model.NowString()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO telegram_turn_origins(thread_id, turn_id, chat_id, topic_id, delivery_nonce, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO telegram_turn_origins(thread_id, turn_id, chat_id, topic_id, delivery_protocol_version, delivery_nonce, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(thread_id, turn_id) DO NOTHING
-	`, strings.TrimSpace(origin.ThreadID), strings.TrimSpace(origin.TurnID), origin.ChatID, origin.TopicID, strings.TrimSpace(origin.DeliveryNonce), now, now)
+	`, strings.TrimSpace(origin.ThreadID), strings.TrimSpace(origin.TurnID), origin.ChatID, origin.TopicID, normalizedDeliveryProtocol(origin.DeliveryProtocolVersion), strings.TrimSpace(origin.DeliveryNonce), now, now)
 	return err
 }
 
 func (s *Store) GetTelegramTurnOrigin(ctx context.Context, threadID, turnID string) (*model.TelegramTurnOrigin, error) {
 	var origin model.TelegramTurnOrigin
 	err := s.db.QueryRowContext(ctx, `
-		SELECT thread_id, turn_id, chat_id, topic_id, delivery_nonce, final_fp, created_at, updated_at
+		SELECT thread_id, turn_id, chat_id, topic_id, delivery_protocol_version, delivery_nonce, final_fp, created_at, updated_at
 		FROM telegram_turn_origins WHERE thread_id = ? AND turn_id = ?
-	`, strings.TrimSpace(threadID), strings.TrimSpace(turnID)).Scan(&origin.ThreadID, &origin.TurnID, &origin.ChatID, &origin.TopicID, &origin.DeliveryNonce, &origin.FinalFP, &origin.CreatedAt, &origin.UpdatedAt)
+	`, strings.TrimSpace(threadID), strings.TrimSpace(turnID)).Scan(&origin.ThreadID, &origin.TurnID, &origin.ChatID, &origin.TopicID, &origin.DeliveryProtocolVersion, &origin.DeliveryNonce, &origin.FinalFP, &origin.CreatedAt, &origin.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return &origin, err
+}
+
+func normalizedDeliveryProtocol(version int) int {
+	if version == 2 {
+		return 2
+	}
+	return 1
 }
 
 func (s *Store) ClaimFileDeliveries(ctx context.Context, threadID, turnID, finalFP string, requests []model.FileDelivery) ([]model.FileDelivery, error) {

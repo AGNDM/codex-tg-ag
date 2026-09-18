@@ -8,6 +8,7 @@ ADR: `docs/adr/ADR-022-agent-file-delivery.md`; feature brief is
 Primary tests:
 
 - `internal/daemon/file_delivery_test.go::TestParseFileDeliveryFinalRequiresMatchingNonceAndStripsDirective`
+- `internal/daemon/file_delivery_test.go::TestParseFileDeliveryFinalV2OmitsNonceAndRejectsV1`
 - `internal/daemon/file_delivery_test.go::TestOpenProjectDeliveryFileEnforcesProjectBoundary`
 - `internal/daemon/file_delivery_linux_test.go::TestOpenProjectDeliveryFileRejectsFIFOWithoutBlocking`
 - `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin`
@@ -15,12 +16,16 @@ Primary tests:
 - `internal/storage/store_file_deliveries_test.go::TestClaimFileDeliveriesFreezesTurnAndDeduplicates`
 - `internal/storage/store_file_deliveries_test.go::TestRecoverSendingFileDeliveriesMarksUnknown`
 - `internal/storage/store_file_deliveries_test.go::TestPutTelegramTurnOriginKeepsFirstDestinationAndNonce`
+- `internal/storage/store_file_deliveries_test.go::TestOpenMigratesTelegramTurnOriginsToProtocolV1`
+- `internal/daemon/project_agent_policy_test.go::TestAdoptedProjectAgentPolicyRequiresExactRegularRootMarker`
+- `internal/daemon/service_test.go::TestAdoptedProjectPolicyUsesShortLeadMarkerAndFileV2`
 - `internal/telegram/api_test.go::TestClientSendDocumentStreamsReader`
 
 Contract notes:
 
-- Only completed Telegram-originated turns with the matching per-turn nonce may
-  request delivery.
+- Only completed Telegram-originated turns may request delivery. Protocol v1
+  additionally requires its per-turn nonce; protocol v2 is selected only for a
+  newly created turn in a Project with the exact `project-v1` marker.
 - Paths stay inside the bound Project, protected paths are rejected, and each
   regular file is limited to the cloud Bot API's 50 MB document limit.
 - Claims are durable before upload; sent files are not repeated, while ambiguous

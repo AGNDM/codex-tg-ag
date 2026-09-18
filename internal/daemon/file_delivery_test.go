@@ -16,7 +16,7 @@ func TestParseFileDeliveryFinalRequiresMatchingNonceAndStripsDirective(t *testin
 		`{"version":1,"nonce":"turn-nonce","files":[{"path":"reports/result.pdf","caption":"Analysis"}]}` +
 		"\n```"
 
-	visible, directive, err := parseFileDeliveryFinal(final, "turn-nonce")
+	visible, directive, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 1, Nonce: "turn-nonce"})
 	if err != nil {
 		t.Fatalf("parseFileDeliveryFinal failed: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestParseFileDeliveryFinalDoesNotTriggerQuotedExample(t *testing.T) {
 		`{"version":1,"nonce":"turn-nonce","files":[{"path":"report.pdf"}]}` +
 		"\n> ```"
 
-	visible, directive, err := parseFileDeliveryFinal(final, "turn-nonce")
+	visible, directive, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 1, Nonce: "turn-nonce"})
 	if err != nil {
 		t.Fatalf("parseFileDeliveryFinal failed: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestParseFileDeliveryFinalDoesNotTriggerInsideCodeExample(t *testing.T) {
 	final := "````markdown\n```codex-tg-file\n" +
 		`{"version":1,"nonce":"turn-nonce","files":[{"path":"report.pdf"}]}` +
 		"\n```\n````"
-	visible, directive, err := parseFileDeliveryFinal(final, "turn-nonce")
+	visible, directive, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 1, Nonce: "turn-nonce"})
 	if err != nil || visible != final || directive != nil {
 		t.Fatalf("visible = %q, directive = %#v, err = %v", visible, directive, err)
 	}
@@ -58,8 +58,25 @@ func TestParseFileDeliveryFinalRejectsNonceMismatchAndUnknownFields(t *testing.T
 		`{"version":1,"nonce":"turn-nonce","chat_id":42,"files":[{"path":"report.pdf"}]}`,
 	} {
 		final := "```codex-tg-file\n" + body + "\n```"
-		if _, _, err := parseFileDeliveryFinal(final, "turn-nonce"); err == nil {
+		if _, _, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 1, Nonce: "turn-nonce"}); err == nil {
 			t.Fatalf("parseFileDeliveryFinal accepted %s", body)
+		}
+	}
+}
+
+func TestParseFileDeliveryFinalV2OmitsNonceAndRejectsV1(t *testing.T) {
+	final := "Done.\n\n```codex-tg-file\n" + `{"version":2,"files":[{"path":"report.pdf"}]}` + "\n```"
+	visible, directive, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 2})
+	if err != nil || visible != "Done." || directive == nil || directive.Version != 2 {
+		t.Fatalf("visible = %q, directive = %#v, err = %v", visible, directive, err)
+	}
+	if _, _, err := parseFileDeliveryFinal(final, fileDeliveryProtocol{Version: 1, Nonce: "legacy"}); err == nil {
+		t.Fatal("v1 origin accepted a v2 directive")
+	}
+	for _, nonce := range []string{`"legacy"`, `""`, `null`} {
+		withNonce := "```codex-tg-file\n" + `{"version":2,"nonce":` + nonce + `,"files":[{"path":"report.pdf"}]}` + "\n```"
+		if _, _, err := parseFileDeliveryFinal(withNonce, fileDeliveryProtocol{Version: 2}); err == nil {
+			t.Fatalf("v2 directive accepted nonce %s", nonce)
 		}
 	}
 }
@@ -174,5 +191,43 @@ func TestProcessFinalFileDeliveriesRequiresCompletedTurn(t *testing.T) {
 	_ = service.processFinalFileDeliveries(ctx, sender, thread, snapshot)
 	if len(sender.documents) != 0 {
 		t.Fatalf("documents = %#v, want none", sender.documents)
+	}
+}
+
+func TestProcessFinalFileDeliveriesV2UsesSavedOriginWithoutNonce(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "v2.txt"), []byte("v2-body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	thread := model.Thread{ID: "thread-v2", ProjectName: "Project", CWD: project}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: "turn-v2", ChatID: 42, TopicID: 9, DeliveryProtocolVersion: 2}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &appserver.ThreadReadSnapshot{LatestTurnID: "turn-v2", LatestTurnStatus: "completed", LatestFinalFP: "fp-v2", LatestFinalText: "Done.\n\n```codex-tg-file\n" + `{"version":2,"files":[{"path":"v2.txt"}]}` + "\n```"}
+	sender := &recordingSender{}
+	visible := service.processFinalFileDeliveries(ctx, sender, thread, snapshot)
+	if len(sender.documents) != 1 || string(sender.documents[0].data) != "v2-body" || strings.Contains(visible, "codex-tg-file") {
+		t.Fatalf("documents = %#v, visible = %q", sender.documents, visible)
+	}
+}
+
+func TestFileDeliveryPromptForTurnUsesPersistedProtocol(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread", TurnID: "legacy", ChatID: 42, DeliveryProtocolVersion: 1, DeliveryNonce: "saved-nonce"}); err != nil {
+		t.Fatal(err)
+	}
+	legacyPrompt, legacy := service.fileDeliveryPromptForTurn(ctx, "thread", "legacy", "project", "continue", "lead")
+	if legacy.Version != 1 || legacy.Nonce != "saved-nonce" || !strings.Contains(legacyPrompt, `nonce "saved-nonce"`) {
+		t.Fatalf("legacy protocol = %#v, prompt = %q", legacy, legacyPrompt)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: "thread", TurnID: "v2", ChatID: 42, DeliveryProtocolVersion: 2}); err != nil {
+		t.Fatal(err)
+	}
+	v2Prompt, v2 := service.fileDeliveryPromptForTurn(ctx, "thread", "v2", "continue", "legacy", "lead")
+	if v2.Version != 2 || v2.Nonce != "" || !strings.Contains(v2Prompt, "policy project-v1; role=lead; file=v2") {
+		t.Fatalf("v2 protocol = %#v, prompt = %q", v2, v2Prompt)
 	}
 }

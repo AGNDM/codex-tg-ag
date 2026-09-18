@@ -16,6 +16,7 @@ import (
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/config"
+	"github.com/mideco-tech/codex-tg/internal/leadpolicy"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
@@ -3109,16 +3110,23 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 
 	service := newTestService(t)
 	ctx := context.Background()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte(projectAgentPolicyMarker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	thread := model.Thread{
 		ID:           "stale-no-active-thread",
 		Title:        "Stale no active",
 		ProjectName:  "Codex",
-		CWD:          "/Users/example/project",
+		CWD:          project,
 		Status:       "active",
 		ActiveTurnID: "turn-stale",
 	}
 	if err := service.store.UpsertThread(ctx, thread); err != nil {
 		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: thread.ActiveTurnID, ChatID: 123456789, DeliveryProtocolVersion: 1, DeliveryNonce: "old-nonce"}); err != nil {
+		t.Fatal(err)
 	}
 	stub := &stubSession{turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]")}
 	service.live = stub
@@ -3136,6 +3144,16 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 	}
 	if len(stub.turnStartCalls) != 1 {
 		t.Fatalf("turnStartCalls = %#v, want one fallback start", stub.turnStartCalls)
+	}
+	if !strings.Contains(stub.turnSteerCalls[0].message, `nonce "old-nonce"`) {
+		t.Fatalf("legacy steer prompt = %q", stub.turnSteerCalls[0].message)
+	}
+	if !strings.Contains(stub.turnStartCalls[0].message, "file=v2") || strings.Contains(stub.turnStartCalls[0].message, "nonce") {
+		t.Fatalf("fallback start prompt = %q", stub.turnStartCalls[0].message)
+	}
+	origin, err := service.store.GetTelegramTurnOrigin(ctx, thread.ID, "started-turn")
+	if err != nil || origin == nil || origin.DeliveryProtocolVersion != 2 || origin.DeliveryNonce != "" {
+		t.Fatalf("fallback origin = %#v, err = %v", origin, err)
 	}
 }
 
@@ -3156,6 +3174,12 @@ func TestActiveTurnMismatchRetriesFoundTurn(t *testing.T) {
 	}
 	if err := service.store.UpsertThread(ctx, thread); err != nil {
 		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: oldTurnID, ChatID: 123456789, DeliveryProtocolVersion: 1, DeliveryNonce: "old-nonce"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: foundTurnID, ChatID: 123456789, DeliveryProtocolVersion: 2}); err != nil {
+		t.Fatal(err)
 	}
 	stub := &stubSession{
 		turnSteerErrs: []error{
@@ -3181,6 +3205,12 @@ func TestActiveTurnMismatchRetriesFoundTurn(t *testing.T) {
 	}
 	if got := stub.turnSteerCalls[1].turnID; got != foundTurnID {
 		t.Fatalf("second steer turn = %q, want found", got)
+	}
+	if !strings.Contains(stub.turnSteerCalls[0].message, `nonce "old-nonce"`) {
+		t.Fatalf("first steer prompt = %q", stub.turnSteerCalls[0].message)
+	}
+	if !strings.Contains(stub.turnSteerCalls[1].message, "file=v2") || strings.Contains(stub.turnSteerCalls[1].message, "nonce") {
+		t.Fatalf("retry steer prompt = %q", stub.turnSteerCalls[1].message)
 	}
 	if len(stub.turnStartCalls) != 0 {
 		t.Fatalf("turnStartCalls = %#v, want no new parallel start", stub.turnStartCalls)
@@ -4953,6 +4983,86 @@ func TestCurrentLeadPolicyAddsRuntimeReminder(t *testing.T) {
 	}
 	if turn.cwd != "/projects/reminder" || turn.model != "gpt-5.6-sol" || turn.reasoningEffort != "medium" {
 		t.Fatalf("turn route = %#v", turn)
+	}
+}
+
+func TestAdoptedProjectPolicyUsesShortLeadMarkerAndFileV2(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte(projectAgentPolicyMarker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := model.LeadAgent{
+		ID: "lead-project-policy", Name: "ProjectLead", ChatID: 123456789, TopicID: 62,
+		ThreadID: "lead-project-policy-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-policy-v1", Status: "idle", PolicyID: leadpolicy.ID, PolicyVersion: leadpolicy.Version,
+	}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.UpsertThread(ctx, model.Thread{ID: agent.ThreadID, CWD: "/stale", Status: "idle", PreferredModel: agent.Model}); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": agent.ProjectID, "name": "Project", "roots": []any{map[string]any{"path": project}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
+	response, err := service.sendInputToThreadTurn(ctx, agent.ChatID, agent.TopicID, agent.ThreadID, "", "fix it", "")
+	if err != nil || response.TurnID == "" || len(stub.turnStartCalls) != 1 {
+		t.Fatalf("response = %#v, calls = %#v, err = %v", response, stub.turnStartCalls, err)
+	}
+	call := stub.turnStartCalls[0]
+	if call.cwd != project || !strings.Contains(call.message, "Project-root AGENTS.md") || !strings.Contains(call.message, "role=lead; file=v2") {
+		t.Fatalf("turn call = %#v", call)
+	}
+	if strings.Contains(call.message, "runtime reminder") || strings.Contains(call.message, "luna_executor") || strings.Contains(call.message, "nonce") {
+		t.Fatalf("short prompt repeated static policy: %s", call.message)
+	}
+	origin, err := service.store.GetTelegramTurnOrigin(ctx, agent.ThreadID, response.TurnID)
+	if err != nil || origin == nil || origin.DeliveryProtocolVersion != 2 || origin.DeliveryNonce != "" {
+		t.Fatalf("origin = %#v, err = %v", origin, err)
+	}
+}
+
+func TestAdoptedProjectPolicyKeepsLegacyPromptForActiveV1Turn(t *testing.T) {
+	t.Parallel()
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte(projectAgentPolicyMarker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := model.LeadAgent{ID: "lead-v1-steer", Name: "Legacy", ChatID: 123456789, TopicID: 63, ThreadID: "thread-v1-steer", Model: "gpt-5.6-sol", ReasoningEffort: "medium", ProjectID: "project-v1-steer", Status: "active", PolicyID: leadpolicy.ID, PolicyVersion: leadpolicy.Version}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	thread := model.Thread{ID: agent.ThreadID, CWD: "/stale", Status: "active", ActiveTurnID: "turn-v1", PreferredModel: agent.Model}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: thread.ActiveTurnID, ChatID: agent.ChatID, TopicID: agent.TopicID, DeliveryProtocolVersion: 1, DeliveryNonce: "legacy-nonce"}); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{map[string]any{"id": agent.ProjectID, "roots": []any{map[string]any{"path": project}}}}}
+	service.live = stub
+	service.liveConnected = true
+	if _, err := service.sendInputToThreadTurn(ctx, agent.ChatID, agent.TopicID, thread.ID, "", "continue", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.turnSteerCalls) != 1 {
+		t.Fatalf("steer calls = %#v", stub.turnSteerCalls)
+	}
+	prompt := stub.turnSteerCalls[0].message
+	for _, want := range []string{"runtime reminder", `nonce "legacy-nonce"`, "Operator request:\ncontinue"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("legacy steer prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "file=v2") {
+		t.Fatalf("legacy turn received v2 marker: %s", prompt)
 	}
 }
 

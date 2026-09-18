@@ -748,8 +748,11 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		return nil, err
 	}
 
-	deliveryNonce := randomToken()
-	promptWithDelivery := withFileDeliveryInstructions(prompt, deliveryNonce)
+	deliveryProtocol := fileDeliveryProtocol{Version: 1, Nonce: randomToken()}
+	if adoptedProjectAgentPolicy(thread.CWD) == projectAgentPolicyVersion {
+		deliveryProtocol = fileDeliveryProtocol{Version: 2}
+	}
+	promptWithDelivery := withFileDeliveryProtocol(prompt, deliveryProtocol, "agent")
 	options := s.turnStartOptions(ctx, "", &thread)
 	started = time.Now()
 	turnPayload, err := live.TurnStart(requestCtx, thread.ID, promptWithDelivery, thread.CWD, options)
@@ -772,7 +775,7 @@ func (s *Service) createThreadFromProjectPrompt(ctx context.Context, chatID, top
 		thread.Status = "inProgress"
 		thread.LastPreview = prompt
 		_ = s.store.UpsertThread(ctx, thread)
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID, deliveryNonce)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, thread.ID, turnID, chatID, topicID, deliveryProtocol.Version, deliveryProtocol.Nonce)
 		s.ensureStartedTurnSnapshot(ctx, &thread, turnID)
 	}
 	if _, refreshErr := s.refreshThreadForOperation(ctx, live, thread.ID, "refresh_new_thread_after_start"); refreshErr != nil {

@@ -1880,23 +1880,23 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if thread == nil {
 		return &DirectResponse{Text: fmt.Sprintf("Unknown thread: %s", threadID)}, nil
 	}
+	operatorText := text
+	var leadAgent *model.LeadAgent
 	var policyUpgradeAgent *model.LeadAgent
 	if agent, agentErr := s.store.GetLeadAgentByTopic(ctx, chatID, topicID); agentErr != nil {
 		return nil, agentErr
-	} else if agent != nil && agent.ThreadID == threadID && !leadpolicy.IsPolicyPrompt(text) {
-		switch leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) {
-		case leadpolicy.Current:
-			text = leadpolicy.RuntimeReminder(text)
-		case leadpolicy.NeedsApply:
-			text = leadpolicy.ApplyWithRequest(agent.Name, text)
-			policyUpgradeAgent = agent
-		case leadpolicy.Incompatible:
-			return &DirectResponse{Text: fmt.Sprintf("Lead policy %s v%d is newer than or incompatible with this daemon's %s v%d. Update the daemon or resolve the policy before starting another task.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
+	} else if agent != nil && agent.ThreadID == threadID {
+		leadAgent = agent
+		if !leadpolicy.IsPolicyPrompt(text) {
+			switch leadpolicy.CompatibilityFor(agent.PolicyID, agent.PolicyVersion) {
+			case leadpolicy.Current:
+			case leadpolicy.NeedsApply:
+				policyUpgradeAgent = agent
+			case leadpolicy.Incompatible:
+				return &DirectResponse{Text: fmt.Sprintf("Lead policy %s v%d is newer than or incompatible with this daemon's %s v%d. Update the daemon or resolve the policy before starting another task.", firstNonEmpty(agent.PolicyID, "unknown"), agent.PolicyVersion, leadpolicy.ID, leadpolicy.Version)}, nil
+			}
 		}
 	}
-	baseText := text
-	deliveryNonce := randomToken()
-	text = withFileDeliveryInstructions(baseText, deliveryNonce)
 	s.mu.RLock()
 	live := s.live
 	connected := s.liveConnected
@@ -1914,6 +1914,31 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	} else if projectRoot != "" {
 		operationCWD = projectRoot
 	}
+	projectPolicy := adoptedProjectAgentPolicy(operationCWD)
+	role := "agent"
+	if leadAgent != nil {
+		role = "lead"
+	}
+	projectText := operatorText
+	legacyText := operatorText
+	if leadAgent != nil && !leadpolicy.IsPolicyPrompt(operatorText) {
+		if policyUpgradeAgent != nil {
+			legacyText = leadpolicy.ApplyWithRequest(leadAgent.Name, operatorText)
+			projectText = legacyText
+		} else {
+			legacyText = leadpolicy.RuntimeReminder(operatorText)
+		}
+	}
+	newTurnProtocol := fileDeliveryProtocol{Version: 1, Nonce: randomToken()}
+	if projectPolicy == projectAgentPolicyVersion {
+		newTurnProtocol = fileDeliveryProtocol{Version: 2}
+	}
+	newTurnText := legacyText
+	if newTurnProtocol.Version == 2 {
+		newTurnText = projectText
+	}
+	text = withFileDeliveryProtocol(newTurnText, newTurnProtocol, role)
+	deliveryProtocol := newTurnProtocol
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
@@ -1986,7 +2011,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
-		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, steerState.TurnID, baseText, deliveryNonce)
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, steerState.TurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, steerState.TurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -1999,7 +2024,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) != "" {
-		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, routeTurnID, baseText, deliveryNonce)
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, routeTurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, routeTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2009,7 +2034,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		})
 	}
 	if result == nil && strings.TrimSpace(routeTurnID) == "" && threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" {
-		text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, thread.ActiveTurnID, baseText, deliveryNonce)
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, thread.ActiveTurnID, projectText, legacyText, role)
 		started = time.Now()
 		result, steerErr = live.TurnSteer(requestCtx, threadID, thread.ActiveTurnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2022,7 +2047,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		if foundTurnID := activeTurnIDFromSteerMismatch(steerErr); foundTurnID != "" {
 			thread.ActiveTurnID = foundTurnID
 			thread.Status = "active"
-			text, deliveryNonce = s.fileDeliveryPromptForTurn(ctx, threadID, foundTurnID, baseText, deliveryNonce)
+			text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, foundTurnID, projectText, legacyText, role)
 			started = time.Now()
 			result, steerErr = live.TurnSteer(requestCtx, threadID, foundTurnID, text)
 			s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
@@ -2056,8 +2081,8 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	startedNewTurn := false
 	effectiveCollaborationMode := strings.TrimSpace(collaborationMode)
 	if result == nil {
-		deliveryNonce = randomToken()
-		text = withFileDeliveryInstructions(baseText, deliveryNonce)
+		deliveryProtocol = newTurnProtocol
+		text = withFileDeliveryProtocol(newTurnText, deliveryProtocol, role)
 		usedDefaultOverride := false
 		if effectiveCollaborationMode == "" && s.threadCollaborationOverride(ctx, threadID) == collaborationModeDefault {
 			effectiveCollaborationMode = collaborationModeDefault
@@ -2097,7 +2122,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		}
 	}
 	if strings.TrimSpace(turn) != "" {
-		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID, deliveryNonce)
+		_ = s.markTelegramOriginTurnFromTelegram(ctx, threadID, turn, chatID, topicID, deliveryProtocol.Version, deliveryProtocol.Nonce)
 		if policyUpgradeAgent != nil {
 			_ = s.store.UpdateLeadAgentPolicy(ctx, policyUpgradeAgent.ID, leadpolicy.ID, leadpolicy.Version)
 		}

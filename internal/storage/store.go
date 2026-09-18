@@ -238,6 +238,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		chat_id INTEGER NOT NULL,
 		topic_id INTEGER NOT NULL DEFAULT 0,
 		delivery_nonce TEXT NOT NULL,
+		delivery_protocol_version INTEGER NOT NULL DEFAULT 1,
 		final_fp TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
@@ -325,6 +326,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "thread_panels", "last_final_card_hash", `ALTER TABLE thread_panels ADD COLUMN last_final_card_hash TEXT`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "telegram_turn_origins", "delivery_protocol_version", `ALTER TABLE telegram_turn_origins ADD COLUMN delivery_protocol_version INTEGER NOT NULL DEFAULT 1`); err != nil {
 		return err
 	}
 	return nil
