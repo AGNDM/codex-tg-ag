@@ -1949,6 +1949,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if err != nil {
 		return nil, err
 	}
+	knownIdleBeforeRefresh := !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
 	inputRefreshSucceeded := false
 	if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_before_start"); refreshErr == nil {
 		inputRefreshSucceeded = true
@@ -2039,7 +2040,7 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			})
 		}
 	}
-	allowStart := !steerAttempted && inputRefreshSucceeded && !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
+	allowStart := !steerAttempted && (inputRefreshSucceeded || knownIdleBeforeRefresh) && !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
 	if result == nil && steerFailureMeansNoActiveTurn(steerErr) {
 		if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_after_no_active_steer"); refreshErr == nil && refreshed != nil {
 			thread = refreshed
@@ -2064,6 +2065,9 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			"steer_err": steerErr,
 		})
 		if !steerAttempted {
+			if threadLooksActiveForInput(thread) {
+				return &DirectResponse{Text: activeThreadReplyText(thread, nil), ThreadID: threadID, TurnID: thread.ActiveTurnID}, nil
+			}
 			return &DirectResponse{
 				Text:     fmt.Sprintf("Codex state for %s could not be confirmed. Your message was not submitted; retry shortly.", thread.Label()),
 				ThreadID: threadID,

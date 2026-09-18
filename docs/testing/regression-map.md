@@ -378,7 +378,6 @@ Primary tests:
 - `internal/daemon/service_test.go::TestNoActiveTurnSteerFailureRereadActiveTurnDoesNotStartParallel`
 - `internal/daemon/service_test.go::TestExpiredArmedTurnUsesCurrentActiveTurnWithoutStarting`
 - `internal/daemon/service_test.go::TestSteerTimeoutDoesNotStartParallelTurn`
-- `internal/daemon/service_test.go::TestRefreshFailureWithoutTargetDoesNotSilentlyDropInput`
 - `internal/daemon/service_test.go::TestStaleSteerAndStopButtonsDoNotTargetCurrentTurn`
 - `internal/daemon/service_test.go::TestStopInterruptFailureDoesNotSetDefaultOverride`
 - `internal/daemon/service_test.go::TestExpiredInterruptedGraceClearsActiveTurnWithoutRearming`

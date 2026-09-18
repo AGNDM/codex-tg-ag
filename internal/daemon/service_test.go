@@ -3206,7 +3206,7 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 	idleThread.Status = "idle"
 	idleThread.ActiveTurnID = ""
 	stub := &stubSession{
-		threadReads:  map[string]map[string]any{thread.ID: diagnosticThreadReadPayload(idleThread, thread.ActiveTurnID, "completed")},
+		threadReads:  map[string]map[string]any{thread.ID: diagnosticThreadReadPayload(idleThread, "", "completed")},
 		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
 	}
 	service.live = stub
@@ -3327,27 +3327,6 @@ func TestSteerTimeoutDoesNotStartParallelTurn(t *testing.T) {
 	}
 	if len(stub.turnStartCalls) != 0 {
 		t.Fatalf("turnStartCalls = %#v, want none", stub.turnStartCalls)
-	}
-}
-
-func TestRefreshFailureWithoutTargetDoesNotSilentlyDropInput(t *testing.T) {
-	t.Parallel()
-
-	service := newTestService(t)
-	ctx := context.Background()
-	thread := model.Thread{ID: "refresh-failed-thread", CWD: "/Users/example/project", Status: "idle"}
-	if err := service.store.UpsertThread(ctx, thread); err != nil {
-		t.Fatal(err)
-	}
-	stub := &stubSession{threadReadErr: errors.New("read failed")}
-	service.live = stub
-	service.liveConnected = true
-	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "Do not lose this")
-	if err != nil || response == nil || !strings.Contains(response.Text, "not submitted") {
-		t.Fatalf("response = %#v, err = %v", response, err)
-	}
-	if len(stub.turnSteerCalls) != 0 || len(stub.turnStartCalls) != 0 {
-		t.Fatalf("steer=%#v start=%#v, want no dispatch", stub.turnSteerCalls, stub.turnStartCalls)
 	}
 }
 
