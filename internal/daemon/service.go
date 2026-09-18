@@ -492,7 +492,7 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 		if err := s.armSteer(ctx, chatID, topicID, route.ThreadID, route.TurnID, panelID); err != nil {
 			return nil, err
 		}
-		return &DirectResponse{CallbackText: "Следующее сообщение пойдёт в этот thread."}, nil
+		return &DirectResponse{CallbackText: "Your next message will steer this turn."}, nil
 	case "approve", "approve_session":
 		decision := "accept"
 		if route.Action == "approve_session" {
@@ -2490,7 +2490,7 @@ func (s *Service) answerChoice(ctx context.Context, chatID, topicID int64, route
 		if response == nil {
 			response = &DirectResponse{}
 		}
-		response.CallbackText = "Ответ отправлен."
+		response.CallbackText = "Answer sent."
 		return response, nil
 	}
 	response, err := s.respondUserInputRequest(ctx, route.RequestID, text)
@@ -2500,7 +2500,7 @@ func (s *Service) answerChoice(ctx context.Context, chatID, topicID int64, route
 	if response == nil {
 		response = &DirectResponse{}
 	}
-	response.CallbackText = "Ответ отправлен."
+	response.CallbackText = "Answer sent."
 	return response, nil
 }
 

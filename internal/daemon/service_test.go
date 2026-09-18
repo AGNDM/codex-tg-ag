@@ -376,6 +376,28 @@ func TestResolveArmedSteerReturnsActiveStateAndExpires(t *testing.T) {
 	}
 }
 
+func TestArmSteerCallbackUsesEnglishStatus(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	route := model.CallbackRoute{
+		Token: "steer-english", Action: "arm_steer", ThreadID: "steer-thread", TurnID: "turn-9",
+		Status: model.CallbackStatusActive, CreatedAt: model.NowString(),
+	}
+	if err := service.store.PutCallbackRoute(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.HandleCallback(ctx, 123456789, 0, 42, 123456789, route.Token)
+	if err != nil {
+		t.Fatalf("HandleCallback(arm_steer) failed: %v", err)
+	}
+	if response == nil || response.CallbackText != "Your next message will steer this turn." {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestTrackedThreadsSkipsIdleRecentHistoryWithoutBindingsOrPanels(t *testing.T) {
 	t.Parallel()
 
