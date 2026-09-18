@@ -374,7 +374,13 @@ Primary tests:
 - `internal/daemon/service_test.go::TestTelegramOriginHotPollCapturesRunningTool`
 - `internal/daemon/service_test.go::TestLiveToolNotificationIgnoresOlderTurnAfterNewerCompletion`
 - `internal/daemon/service_test.go::TestRefreshThreadForOperationDefersEmptyInterrupted`
-- `internal/daemon/service_test.go::TestInputDuringInterruptedGraceIsNotSubmitted`
+- `internal/daemon/service_test.go::TestInputDuringInterruptedGraceSteersLatestArmedTarget`
+- `internal/daemon/service_test.go::TestNoActiveTurnSteerFailureRereadActiveTurnDoesNotStartParallel`
+- `internal/daemon/service_test.go::TestExpiredArmedTurnUsesCurrentActiveTurnWithoutStarting`
+- `internal/daemon/service_test.go::TestSteerTimeoutDoesNotStartParallelTurn`
+- `internal/daemon/service_test.go::TestRefreshFailureWithoutTargetDoesNotSilentlyDropInput`
+- `internal/daemon/service_test.go::TestStaleSteerAndStopButtonsDoNotTargetCurrentTurn`
+- `internal/daemon/service_test.go::TestStopInterruptFailureDoesNotSetDefaultOverride`
 - `internal/daemon/service_test.go::TestExpiredInterruptedGraceClearsActiveTurnWithoutRearming`
 
 Live E2E:
@@ -387,7 +393,9 @@ Live E2E:
 Contract notes:
 
 - Implicit Telegram-origin `interrupted` is ambiguous until it recovers, expires, or follows explicit `/stop`.
-- Deferred `interrupted` preserves the live UI but does not permit `turn/steer`; the operator receives an explicit not-submitted response.
+- Deferred `interrupted` preserves the live UI and permits one `turn/steer` attempt for the selected target; App Server remains authoritative.
+- Only an explicit no-active response followed by a successful idle re-read may start a replacement turn; uncertain failures never start in parallel.
+- Old Stop/Steer buttons cannot act on a newer turn, and failed Stop requests do not leave a Default Mode override.
 - Expiry clears the matching stale active-turn identity and remains accepted across repeated refreshes and terminal logging.
 - Deferred terminal state must not collapse the live panel into a false Final Card.
 - The daemon must keep polling deferred turns hot.
