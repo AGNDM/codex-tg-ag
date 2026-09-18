@@ -5046,7 +5046,9 @@ func TestAdoptedProjectPolicyKeepsLegacyPromptForActiveV1Turn(t *testing.T) {
 	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: thread.ActiveTurnID, ChatID: agent.ChatID, TopicID: agent.TopicID, DeliveryProtocolVersion: 1, DeliveryNonce: "legacy-nonce"}); err != nil {
 		t.Fatal(err)
 	}
-	stub := &stubSession{projectListResult: map[string]any{"data": []any{map[string]any{"id": agent.ProjectID, "roots": []any{map[string]any{"path": project}}}}}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": agent.ProjectID, "roots": []any{map[string]any{"path": project}}},
+	}}}
 	service.live = stub
 	service.liveConnected = true
 	if _, err := service.sendInputToThreadTurn(ctx, agent.ChatID, agent.TopicID, thread.ID, "", "continue", ""); err != nil {
