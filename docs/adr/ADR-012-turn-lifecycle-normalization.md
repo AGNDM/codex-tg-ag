@@ -71,7 +71,9 @@ App Server can transiently report a Telegram-origin turn as `interrupted` before
 - if the same turn later shows active/waiting or final evidence, the defer marker is cleared and normal rendering resumes
 - if the defer window expires, the `interrupted` snapshot is accepted as terminal
 - explicit `/stop` or Stop button writes an explicit interrupt marker so its terminal `interrupted` bypasses deferral
-- deferred UI state does not make the turn eligible for `turn/steer`; while the same turn remains ambiguously `interrupted`, Telegram input is rejected with an explicit not-submitted response
+- deferred UI state is not authoritative input state; an explicit armed, reply, or current-turn target may attempt `turn/steer` once and lets App Server decide whether that exact turn is still active
+- a steer error may fall back to `turn/start` only when App Server explicitly reports no active turn and a successful re-read confirms that no newer active turn exists; timeouts, unknown errors, and failed re-reads never start a parallel turn
+- callback Steer remains bound to its original panel, message, and turn; callback Stop remains bound to its original turn; neither old button may target a newer active turn
 - the first defer deadline is fixed for the turn; terminal logging and repeated reads must not reopen or extend it
 - after expiry, the matching stale `activeTurnId` is cleared before persistence so SQLite metadata fallback cannot make the interrupted turn steerable again
 - explicit same-turn active or waiting evidence within the window restores normal routing; tool output is not required evidence of liveness
@@ -105,6 +107,8 @@ Nil-safe rendering is part of turn lifecycle normalization because the bad state
   - nil-like payload values do not leak into command, Details, summary, tool, output, or RPC request rendering
   - old live loops cannot clear newer session state
   - implicit Telegram-origin `interrupted` is deferred, recovered, expired, or bypassed for explicit stop
+  - a latest-turn steer may succeed during the defer window without opening a new turn
+  - stale Stop/Steer callbacks cannot target a newer active turn
 
 ## Non-goals
 

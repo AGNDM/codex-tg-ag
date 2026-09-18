@@ -485,10 +485,10 @@ func (s *Service) HandleCallback(ctx context.Context, chatID, topicID, messageID
 		return s.interruptTurn(ctx, chatID, topicID, route.ThreadID, route.TurnID)
 	case "arm_steer":
 		panel, _ := s.store.GetCurrentThreadPanel(ctx, chatID, topicID, route.ThreadID)
-		panelID := int64(0)
-		if panel != nil {
-			panelID = panel.ID
+		if panel == nil || strings.TrimSpace(panel.CurrentTurnID) != strings.TrimSpace(route.TurnID) || (panel.SummaryMessageID != 0 && panel.SummaryMessageID != messageID) {
+			return &DirectResponse{CallbackText: "This Steer button is stale."}, nil
 		}
+		panelID := panel.ID
 		if err := s.armSteer(ctx, chatID, topicID, route.ThreadID, route.TurnID, panelID); err != nil {
 			return nil, err
 		}
@@ -1949,9 +1949,14 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 	if err != nil {
 		return nil, err
 	}
-	if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_before_start"); refreshErr == nil && refreshed != nil {
-		thread = refreshed
-	} else if refreshErr != nil {
+	knownIdleBeforeRefresh := !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
+	inputRefreshSucceeded := false
+	if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_before_start"); refreshErr == nil {
+		inputRefreshSucceeded = true
+		if refreshed != nil {
+			thread = refreshed
+		}
+	} else {
 		s.logLifecycle("thread_refresh_failed", lifecycleFields{
 			"operation": "refresh_thread_before_start",
 			"thread_id": threadID,
@@ -1966,37 +1971,27 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 		turnID string
 		route  string
 	}
-	targets := []inputTarget{
-		{turnID: routeTurnID, route: "reply"},
-		{turnID: thread.ActiveTurnID, route: "active_turn"},
+	target := inputTarget{turnID: thread.ActiveTurnID, route: "active_turn"}
+	if strings.TrimSpace(routeTurnID) != "" {
+		target = inputTarget{turnID: routeTurnID, route: "reply"}
 	}
-	if steerState != nil && steerState.ThreadID == threadID {
-		targets = append([]inputTarget{{turnID: steerState.TurnID, route: "armed"}}, targets...)
+	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
+		target = inputTarget{turnID: steerState.TurnID, route: "armed"}
 	}
-	for _, target := range targets {
-		turnID := strings.TrimSpace(target.turnID)
-		if turnID == "" {
-			continue
-		}
+	target.turnID = strings.TrimSpace(target.turnID)
+	if target.turnID != "" {
+		turnID := target.turnID
 		decision, expiresAt, ok := s.interruptedTurnInputDecision(ctx, threadID, turnID, now)
-		if !ok {
-			continue
-		}
-		if decision == terminalGateDefer {
-			s.logLifecycle("telegram_turn_input_rejected", lifecycleFields{
+		if ok && decision == terminalGateDefer {
+			s.logLifecycle("telegram_turn_input_steer_attempt", lifecycleFields{
 				"thread_id":   threadID,
 				"turn_id":     turnID,
 				"route":       target.route,
 				"reason":      "interrupted_state_pending",
 				"defer_until": expiresAt,
 			})
-			return &DirectResponse{
-				Text:     fmt.Sprintf("Codex is confirming that turn %s was interrupted. Your message was not submitted; retry shortly.", turnID),
-				ThreadID: threadID,
-				TurnID:   turnID,
-			}, nil
 		}
-		if decision == terminalGateAccept {
+		if ok && decision == terminalGateAccept {
 			if steerState != nil && steerState.ThreadID == threadID && steerState.TurnID == turnID {
 				_ = s.store.ClearSteerState(ctx, chatID, topicID)
 				steerState = nil
@@ -2008,43 +2003,31 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 				thread.ActiveTurnID = ""
 				thread.Status = "interrupted"
 			}
+			target.turnID = ""
+			if threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" && strings.TrimSpace(thread.ActiveTurnID) != turnID {
+				target = inputTarget{turnID: strings.TrimSpace(thread.ActiveTurnID), route: "active_turn"}
+			}
 		}
 	}
-	if steerState != nil && steerState.ThreadID == threadID && strings.TrimSpace(steerState.TurnID) != "" {
-		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, steerState.TurnID, projectText, legacyText, role)
+	steerAttempted := target.turnID != ""
+	if steerAttempted {
+		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, target.turnID, projectText, legacyText, role)
 		started = time.Now()
-		result, steerErr = live.TurnSteer(requestCtx, threadID, steerState.TurnID, text)
+		result, steerErr = live.TurnSteer(requestCtx, threadID, target.turnID, text)
 		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
 			"thread_id": threadID,
-			"turn_id":   steerState.TurnID,
-			"route":     "armed",
+			"turn_id":   target.turnID,
+			"route":     target.route,
 		})
-		if steerErr == nil {
+		if steerErr == nil && target.route == "armed" {
 			_ = s.store.ClearSteerState(ctx, chatID, topicID)
 		}
 	}
-	if result == nil && strings.TrimSpace(routeTurnID) != "" {
-		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, routeTurnID, projectText, legacyText, role)
-		started = time.Now()
-		result, steerErr = live.TurnSteer(requestCtx, threadID, routeTurnID, text)
-		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
-			"thread_id": threadID,
-			"turn_id":   routeTurnID,
-			"route":     "reply",
-		})
-	}
-	if result == nil && strings.TrimSpace(routeTurnID) == "" && threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" {
-		text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, thread.ActiveTurnID, projectText, legacyText, role)
-		started = time.Now()
-		result, steerErr = live.TurnSteer(requestCtx, threadID, thread.ActiveTurnID, text)
-		s.logAppServerCall("TurnSteer", started, steerErr, live, lifecycleFields{
-			"thread_id": threadID,
-			"turn_id":   thread.ActiveTurnID,
-			"route":     "active_turn",
-		})
-	}
 	if result == nil {
 		if foundTurnID := activeTurnIDFromSteerMismatch(steerErr); foundTurnID != "" {
+			if target.route == "armed" {
+				_ = s.store.ClearSteerState(ctx, chatID, topicID)
+			}
 			thread.ActiveTurnID = foundTurnID
 			thread.Status = "active"
 			text, deliveryProtocol = s.fileDeliveryPromptForTurn(ctx, threadID, foundTurnID, projectText, legacyText, role)
@@ -2057,9 +2040,14 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			})
 		}
 	}
+	allowStart := !steerAttempted && (inputRefreshSucceeded || knownIdleBeforeRefresh) && !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
 	if result == nil && steerFailureMeansNoActiveTurn(steerErr) {
 		if refreshed, refreshErr := s.refreshThreadForOperation(ctx, live, threadID, "refresh_thread_after_no_active_steer"); refreshErr == nil && refreshed != nil {
 			thread = refreshed
+			allowStart = !threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) == ""
+			if target.route == "armed" {
+				_ = s.store.ClearSteerState(ctx, chatID, topicID)
+			}
 		} else if refreshErr != nil {
 			s.logLifecycle("thread_refresh_failed", lifecycleFields{
 				"operation": "refresh_thread_after_no_active_steer",
@@ -2069,18 +2057,28 @@ func (s *Service) sendInputToThreadTurn(ctx context.Context, chatID, topicID int
 			})
 		}
 	}
-	if result == nil && !steerFailureMeansNoActiveTurn(steerErr) && (threadLooksActiveForInput(thread) || steerFailureImpliesActive(steerErr)) {
+	if result == nil && !allowStart {
 		s.logLifecycle("telegram_turn_input_rejected", lifecycleFields{
 			"thread_id": threadID,
 			"turn_id":   thread.ActiveTurnID,
 			"reason":    "thread_still_active",
 			"steer_err": steerErr,
 		})
+		if !steerAttempted {
+			if threadLooksActiveForInput(thread) {
+				return &DirectResponse{Text: activeThreadReplyText(thread, nil), ThreadID: threadID, TurnID: thread.ActiveTurnID}, nil
+			}
+			return &DirectResponse{
+				Text:     fmt.Sprintf("Codex state for %s could not be confirmed. Your message was not submitted; retry shortly.", thread.Label()),
+				ThreadID: threadID,
+				TurnID:   thread.ActiveTurnID,
+			}, nil
+		}
 		return &DirectResponse{Text: activeThreadReplyText(thread, steerErr), ThreadID: threadID, TurnID: thread.ActiveTurnID}, nil
 	}
 	startedNewTurn := false
 	effectiveCollaborationMode := strings.TrimSpace(collaborationMode)
-	if result == nil {
+	if result == nil && allowStart {
 		deliveryProtocol = newTurnProtocol
 		text = withFileDeliveryProtocol(newTurnText, deliveryProtocol, role)
 		usedDefaultOverride := false
@@ -2298,21 +2296,6 @@ func threadLooksActiveForInput(thread *model.Thread) bool {
 	return threadLooksActiveForPolling(*thread)
 }
 
-func steerFailureImpliesActive(err error) bool {
-	if err == nil {
-		return false
-	}
-	if steerFailureMeansNoActiveTurn(err) {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "active turn") ||
-		strings.Contains(msg, "activeturn") ||
-		strings.Contains(msg, "already active") ||
-		strings.Contains(msg, "in-flight") ||
-		strings.Contains(msg, "not steerable")
-}
-
 func steerFailureMeansNoActiveTurn(err error) bool {
 	if err == nil {
 		return false
@@ -2320,7 +2303,8 @@ func steerFailureMeansNoActiveTurn(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no active turn") ||
 		strings.Contains(msg, "no active run") ||
-		strings.Contains(msg, "turn is not active")
+		strings.Contains(msg, "turn is not active") ||
+		strings.Contains(msg, "turn already completed")
 }
 
 func activeTurnIDFromSteerMismatch(err error) string {
@@ -2378,9 +2362,7 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 	if strings.TrimSpace(threadID) == "" {
 		return &DirectResponse{CallbackText: "No thread target for stop."}, nil
 	}
-	if err := s.setThreadCollaborationDefaultOverride(ctx, threadID); err != nil {
-		return nil, err
-	}
+	requestedTurnID := strings.TrimSpace(turnID)
 	thread, _ := s.store.GetThread(ctx, threadID)
 	s.mu.RLock()
 	live := s.live
@@ -2410,6 +2392,8 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 	if thread != nil {
 		if latestTurnTerminal {
 			turnID = ""
+		} else if requestedTurnID != "" && requestedTurnID != strings.TrimSpace(thread.ActiveTurnID) {
+			return &DirectResponse{CallbackText: "This Stop button is stale."}, nil
 		} else if threadLooksActiveForInput(thread) && strings.TrimSpace(thread.ActiveTurnID) != "" {
 			turnID = thread.ActiveTurnID
 		} else {
@@ -2417,6 +2401,9 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 		}
 	}
 	if strings.TrimSpace(turnID) == "" {
+		if err := s.setThreadCollaborationDefaultOverride(ctx, threadID); err != nil {
+			return nil, err
+		}
 		explicitTarget := model.ObserverTarget{ChatKey: model.ChatKey(chatID, topicID), ChatID: chatID, TopicID: topicID, Enabled: true}
 		s.syncThreadPanelToTarget(ctx, explicitTarget, threadID, false, model.PanelSourceExplicit)
 		return &DirectResponse{CallbackText: "Thread is already idle."}, nil
@@ -2429,6 +2416,9 @@ func (s *Service) interruptTurn(ctx context.Context, chatID, topicID int64, thre
 			"thread_id": threadID,
 			"turn_id":   turnID,
 		})
+		return nil, err
+	}
+	if err := s.setThreadCollaborationDefaultOverride(ctx, threadID); err != nil {
 		return nil, err
 	}
 	_ = s.markTelegramOriginExplicitInterrupt(ctx, threadID, turnID)

@@ -35,9 +35,9 @@ for that same turn.
 - During the recovery window, refresh with `thread/read` before routing input.
 - If the same turn explicitly recovers to active or waiting, use its normal input
   route.
-- If it remains implicitly `interrupted`, send a clear response that the input was
-  not submitted and should be retried after state confirmation. Call neither
-  `turn/steer` nor `turn/start`.
+- If it remains implicitly `interrupted`, attempt `turn/steer` once for the
+  selected explicit target and let App Server decide whether that exact turn is
+  still active. Do not call `turn/start` after an uncertain steer result.
 - After the recovery deadline confirms `interrupted`, a new operator message may
   start one new turn. Replies and armed steer state must not target the old turn.
 
@@ -88,15 +88,17 @@ active-but-not-steerable, and no-active-steer fallback behavior.
 
 Use a dedicated test topic/thread. During a controlled implicit interrupted state,
 send input inside the grace window and verify through Telegram readback that the
-bridge says it was not submitted. After expiry, send a new task and verify one new
-turn ID and one `New run`, with no steer call for the old turn. Also verify a normal
+bridge attempts one steer without starting a parallel turn. After expiry, send a
+new task and verify one new turn ID and one `New run` only after an idle re-read,
+with no steer call for the old turn. Also verify a normal
 long-running turn still accepts steering. Correlate sanitized lifecycle logs and
 SQLite gate state. If a controlled implicit interrupted state cannot be produced,
 record that exact live-QA blocker.
 
 ## Acceptance Criteria
 
-- [ ] Deferred interrupted UI state never grants `TurnSteer` eligibility.
+- [ ] Deferred interrupted UI state permits one `TurnSteer` attempt only for the
+      selected target and never grants `TurnStart` eligibility by itself.
 - [ ] The first interrupted deadline cannot be extended by polling, input,
       diagnostics, or an inconclusive read.
 - [ ] Expiry clears only the matching stale active turn and remains terminal across

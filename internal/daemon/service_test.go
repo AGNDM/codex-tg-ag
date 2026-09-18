@@ -388,6 +388,12 @@ func TestArmSteerCallbackUsesEnglishStatus(t *testing.T) {
 	if err := service.store.PutCallbackRoute(ctx, route); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.store.CreateThreadPanel(ctx, model.ThreadPanel{
+		ChatID: 123456789, TopicID: 0, ThreadID: route.ThreadID, SummaryMessageID: 42,
+		CurrentTurnID: route.TurnID, Status: "inProgress",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	response, err := service.HandleCallback(ctx, 123456789, 0, 42, 123456789, route.Token)
 	if err != nil {
@@ -395,6 +401,49 @@ func TestArmSteerCallbackUsesEnglishStatus(t *testing.T) {
 	}
 	if response == nil || response.CallbackText != "Your next message will steer this turn." {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestStaleSteerAndStopButtonsDoNotTargetCurrentTurn(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "button-thread", CWD: "/Users/example/project", Status: "active", ActiveTurnID: "turn-current"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.store.CreateThreadPanel(ctx, model.ThreadPanel{
+		ChatID: 123456789, TopicID: 0, ThreadID: thread.ID, SummaryMessageID: 42,
+		CurrentTurnID: thread.ActiveTurnID, Status: "inProgress",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	route := model.CallbackRoute{
+		Token: "stale-steer", Action: "arm_steer", ThreadID: thread.ID, TurnID: "turn-old",
+		Status: model.CallbackStatusActive, CreatedAt: model.NowString(),
+	}
+	if err := service.store.PutCallbackRoute(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.HandleCallback(ctx, 123456789, 0, 41, 123456789, route.Token)
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
+		t.Fatalf("stale Steer response = %#v, err = %v", response, err)
+	}
+	state, err := service.store.GetSteerState(ctx, 123456789, 0)
+	if err != nil || state != nil {
+		t.Fatalf("steer state = %#v, err = %v; want none", state, err)
+	}
+
+	stub := &stubSession{}
+	service.live = stub
+	service.liveConnected = true
+	response, err = service.interruptTurn(ctx, 123456789, 0, thread.ID, "turn-old")
+	if err != nil || response == nil || !strings.Contains(response.CallbackText, "stale") {
+		t.Fatalf("stale Stop response = %#v, err = %v", response, err)
+	}
+	if len(stub.turnInterruptCalls) != 0 {
+		t.Fatalf("turnInterruptCalls = %#v, want none", stub.turnInterruptCalls)
 	}
 }
 
@@ -2609,7 +2658,7 @@ func TestRefreshThreadForOperationDefersEmptyInterrupted(t *testing.T) {
 	}
 }
 
-func TestInputDuringInterruptedGraceIsNotSubmitted(t *testing.T) {
+func TestInputDuringInterruptedGraceSteersLatestArmedTarget(t *testing.T) {
 	t.Parallel()
 
 	service := newTestService(t)
@@ -2631,6 +2680,9 @@ func TestInputDuringInterruptedGraceIsNotSubmitted(t *testing.T) {
 	if err := service.markTelegramOriginTurn(ctx, thread.ID, turnID); err != nil {
 		t.Fatalf("markTelegramOriginTurn failed: %v", err)
 	}
+	if err := service.armSteer(ctx, 123456789, 0, thread.ID, turnID, 0); err != nil {
+		t.Fatalf("armSteer failed: %v", err)
+	}
 	stub := &stubSession{
 		threadReads: map[string]map[string]any{
 			thread.ID: diagnosticThreadReadPayload(thread, turnID, "interrupted"),
@@ -2643,11 +2695,11 @@ func TestInputDuringInterruptedGraceIsNotSubmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sendInputToThread failed: %v", err)
 	}
-	if response == nil || !strings.Contains(response.Text, "not submitted") {
-		t.Fatalf("response = %#v, want interrupted-state not-submitted message", response)
+	if response == nil || response.ThreadID != thread.ID || response.TurnID != turnID {
+		t.Fatalf("response = %#v, want steered interrupted target", response)
 	}
-	if len(stub.turnSteerCalls) != 0 || len(stub.turnStartCalls) != 0 {
-		t.Fatalf("turn calls during interrupted grace: steer=%#v start=%#v, want none", stub.turnSteerCalls, stub.turnStartCalls)
+	if len(stub.turnSteerCalls) != 1 || len(stub.turnStartCalls) != 0 {
+		t.Fatalf("turn calls during interrupted grace: steer=%#v start=%#v, want one steer and no start", stub.turnSteerCalls, stub.turnStartCalls)
 	}
 }
 
@@ -3150,7 +3202,16 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: thread.ActiveTurnID, ChatID: 123456789, DeliveryProtocolVersion: 1, DeliveryNonce: "old-nonce"}); err != nil {
 		t.Fatal(err)
 	}
-	stub := &stubSession{turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]")}
+	idleThread := thread
+	idleThread.Status = "completed"
+	idleThread.ActiveTurnID = ""
+	stub := &stubSession{
+		threadReadQueue: map[string][]map[string]any{thread.ID: {
+			diagnosticThreadReadPayload(thread, thread.ActiveTurnID, "inProgress"),
+			diagnosticThreadReadPayload(idleThread, thread.ActiveTurnID, "completed"),
+		}},
+		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
+	}
 	service.live = stub
 	service.liveConnected = true
 
@@ -3176,6 +3237,99 @@ func TestNoActiveTurnSteerFailureFallsBackToTurnStart(t *testing.T) {
 	origin, err := service.store.GetTelegramTurnOrigin(ctx, thread.ID, "started-turn")
 	if err != nil || origin == nil || origin.DeliveryProtocolVersion != 2 || origin.DeliveryNonce != "" {
 		t.Fatalf("fallback origin = %#v, err = %v", origin, err)
+	}
+}
+
+func TestNoActiveTurnSteerFailureRereadActiveTurnDoesNotStartParallel(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "stale-reread-active-thread", Title: "Stale reread active", ProjectName: "Codex", CWD: "/Users/example/project", Status: "active", ActiveTurnID: "turn-stale"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.armSteer(ctx, 123456789, 0, thread.ID, thread.ActiveTurnID, 0); err != nil {
+		t.Fatal(err)
+	}
+	newThread := thread
+	newThread.ActiveTurnID = "turn-new-active"
+	newThread.Status = "active"
+	stub := &stubSession{
+		threadReadQueue: map[string][]map[string]any{thread.ID: {
+			diagnosticThreadReadPayload(thread, thread.ActiveTurnID, "inProgress"),
+			diagnosticThreadReadPayload(newThread, newThread.ActiveTurnID, "inProgress"),
+		}},
+		turnSteerErr: errors.New("map[code:-32600 message:no active turn to steer]"),
+	}
+	service.live = stub
+	service.liveConnected = true
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "Use the reread active turn")
+	if err != nil {
+		t.Fatalf("sendInputToThread failed: %v", err)
+	}
+	if response == nil || response.ThreadID != thread.ID || response.TurnID != newThread.ActiveTurnID {
+		t.Fatalf("response = %#v, want reread active turn", response)
+	}
+	if len(stub.turnStartCalls) != 0 {
+		t.Fatalf("turnStartCalls = %#v, want no new turn", stub.turnStartCalls)
+	}
+	state, err := service.store.GetSteerState(ctx, 123456789, 0)
+	if err != nil || state != nil {
+		t.Fatalf("steer state = %#v, err = %v; want cleared stale target", state, err)
+	}
+}
+
+func TestExpiredArmedTurnUsesCurrentActiveTurnWithoutStarting(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "expired-armed-thread", CWD: "/Users/example/project", Status: "active", ActiveTurnID: "turn-current"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.armSteer(ctx, 123456789, 0, thread.ID, "turn-old", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.saveTelegramOriginEmptyInterruptedDefer(ctx, thread.ID, "turn-old", terminalGateState{
+		ThreadID: thread.ID, TurnID: "turn-old", LastDecision: string(terminalGateAccept), LastReason: "grace_expired",
+		ExpiresAt: model.TimeString(time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{threadReads: map[string]map[string]any{
+		thread.ID: diagnosticThreadReadPayload(thread, thread.ActiveTurnID, "inProgress"),
+	}}
+	service.live = stub
+	service.liveConnected = true
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "Steer the current turn")
+	if err != nil || response == nil || response.TurnID != thread.ActiveTurnID {
+		t.Fatalf("response = %#v, err = %v", response, err)
+	}
+	if len(stub.turnSteerCalls) != 1 || stub.turnSteerCalls[0].turnID != thread.ActiveTurnID || len(stub.turnStartCalls) != 0 {
+		t.Fatalf("steer=%#v start=%#v", stub.turnSteerCalls, stub.turnStartCalls)
+	}
+}
+
+func TestSteerTimeoutDoesNotStartParallelTurn(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "steer-timeout-thread", CWD: "/Users/example/project", Status: "active", ActiveTurnID: "turn-active"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{turnSteerErr: context.DeadlineExceeded}
+	service.live = stub
+	service.liveConnected = true
+	response, err := service.sendInputToThread(ctx, 123456789, 0, thread.ID, "Do not duplicate this")
+	if err != nil || response == nil || !strings.Contains(response.Text, "did not start a parallel turn") {
+		t.Fatalf("response = %#v, err = %v", response, err)
+	}
+	if len(stub.turnStartCalls) != 0 {
+		t.Fatalf("turnStartCalls = %#v, want none", stub.turnStartCalls)
 	}
 }
 
@@ -4167,6 +4321,26 @@ func TestStopTreatsCompletedThreadWithStaleActiveTurnAsIdle(t *testing.T) {
 	}
 	if got := service.threadCollaborationOverride(ctx, thread.ID); got != collaborationModeDefault {
 		t.Fatalf("threadCollaborationOverride = %q, want default after stale completed /stop", got)
+	}
+}
+
+func TestStopInterruptFailureDoesNotSetDefaultOverride(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	thread := model.Thread{ID: "stop-failed-default-thread", Title: "Stop failed default", ProjectName: "Codex", CWD: "/Users/example/project", Status: "active", ActiveTurnID: "turn-active"}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	stub := &stubSession{turnInterruptErr: errors.New("interrupt failed")}
+	service.live = stub
+	service.liveConnected = true
+	if _, err := service.handleCommand(ctx, 123456789, 0, "/stop "+thread.ID, 0); err == nil {
+		t.Fatal("handleCommand(/stop) succeeded despite interrupt failure")
+	}
+	if got := service.threadCollaborationOverride(ctx, thread.ID); got != "" {
+		t.Fatalf("threadCollaborationOverride = %q, want empty after failed interrupt", got)
 	}
 }
 
@@ -5594,6 +5768,7 @@ func (s *startCountingSession) StartCalls() int {
 
 type stubSession struct {
 	threadReads            map[string]map[string]any
+	threadReadQueue        map[string][]map[string]any
 	threadListResult       map[string]any
 	projectListResult      map[string]any
 	threadProjectUpdates   []string
@@ -5612,6 +5787,7 @@ type stubSession struct {
 	turnStartErr           error
 	turnSteerErr           error
 	turnSteerErrs          []error
+	turnInterruptErr       error
 	threadStartCalls       []string
 	threadResumeCalls      []threadResumeCall
 	turnSteerCalls         []turnCall
@@ -5665,6 +5841,11 @@ func (s *stubSession) ThreadRead(ctx context.Context, threadID string, includeTu
 	if s.threadReadErr != nil {
 		return nil, s.threadReadErr
 	}
+	if queue := s.threadReadQueue[threadID]; len(queue) > 0 {
+		payload := queue[0]
+		s.threadReadQueue[threadID] = queue[1:]
+		return payload, nil
+	}
 	if payload, ok := s.threadReads[threadID]; ok {
 		return payload, nil
 	}
@@ -5714,7 +5895,7 @@ func (s *stubSession) TurnSteer(ctx context.Context, threadID, turnID, message s
 }
 func (s *stubSession) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
 	s.turnInterruptCalls = append(s.turnInterruptCalls, turnCall{threadID: threadID, turnID: turnID})
-	return nil
+	return s.turnInterruptErr
 }
 func (s *stubSession) ModelList(ctx context.Context, includeHidden bool) ([]appserver.ModelOption, error) {
 	if s.modelListErr != nil {
