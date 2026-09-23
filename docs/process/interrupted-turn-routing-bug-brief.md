@@ -13,6 +13,47 @@ can restore the old active identity and repeat the cycle.
 The absence of tool output is a useful reproduction shape, not proof that a turn
 is dead. A legitimate active turn may have no tool output.
 
+### Additional reproduction: asynchronous tool result is orphaned
+
+On 2026-09-22, a Telegram-origin Lead turn started a bounded code-mode query and
+received `Script running with cell ID ...`. Before the operator sent another
+message, App Server marked the turn `interrupted`. The tool cell could still
+finish, or an individual tool item could already appear `completed`, while the
+turn no longer resumed model execution and never produced a final answer.
+
+Treat this as a distinct unresolved lifecycle case. A running or completed tool
+item is not itself proof that the model turn can still resume, but the bridge must
+not silently present a healthy active run when the tool continuation has been
+orphaned. Investigation must correlate the App Server turn transition, tool/cell
+completion, and delivery of the tool result back to the model. The expected UX is
+either continued execution through a final answer or a prompt terminal error that
+states the tool continuation was lost; indefinite active/interrupted oscillation
+is invalid.
+
+### Confirmed repair-isolation defect
+
+The App Server request client currently races an internal response timer against
+the caller context deadline. The same `thread/read` deadline can therefore return
+either `context.DeadlineExceeded` or an ordinary `request timeout` error. The
+daemon exempts only context cancellation/deadline errors from automatic repair;
+the ordinary timeout requests a repair that closes both the shared poll and live
+App Server sessions. Closing live can interrupt unrelated active turns owned by
+other Lead Agents.
+
+The historical `repair.last_reason=thread_read` state proves this repair path has
+been requested, but does not by itself prove that every observed interruption was
+caused by it. Incident-level attribution requires a matching timeline of the
+failed read, repair request, live close/generation change, and turn transition.
+
+The follow-up fix should first make request timeouts consistently wrap
+`context.DeadlineExceeded`, then isolate automatic poll and live repair by role
+and expected generation. Poll repair must not close live, invalidate approvals,
+or disturb active turns. Explicit operator `/repair` may remain a full repair.
+Transport EOF/process exit must be surfaced as a typed transport failure so a
+dead poll process does not degrade into endless timeouts. ADR-012's 90-second
+terminal gate is not the cause and should remain unchanged until the session
+repair defect is fixed and re-evaluated.
+
 ## Goal
 
 For one turn identity, keep the first implicit `interrupted` deadline fixed. While
