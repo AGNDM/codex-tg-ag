@@ -138,6 +138,32 @@ func TestCompactSnapshotStoresToolTimingOnFirstSeen(t *testing.T) {
 	}
 }
 
+func TestCompactSnapshotOmitsDuplicatedThreadRaw(t *testing.T) {
+	t.Parallel()
+
+	current := ThreadReadSnapshot{
+		Thread: model.Thread{
+			ID:  "thread-compact-raw",
+			Raw: json.RawMessage(`{"thread":{"id":"thread-compact-raw","turns":[{"id":"turn-1"}]}}`),
+		},
+		LatestTurnID:     "turn-1",
+		LatestTurnStatus: "completed",
+		LatestFinalText:  "done",
+	}
+	state := CompactSnapshot(nil, current, time.Now().UTC())
+
+	var compact ThreadReadSnapshot
+	if err := json.Unmarshal(state.CompactJSON, &compact); err != nil {
+		t.Fatalf("unmarshal compact snapshot: %v", err)
+	}
+	if string(compact.Thread.Raw) != "null" {
+		t.Fatalf("compact Thread.Raw = %q, want null", compact.Thread.Raw)
+	}
+	if compact.LatestFinalText != "done" || compact.LatestTurnID != "turn-1" {
+		t.Fatalf("compact terminal fields = %#v, want preserved latest turn/final", compact)
+	}
+}
+
 func TestCompactSnapshotPreservesTurnStartedAtWhenToolIsMissing(t *testing.T) {
 	t.Parallel()
 

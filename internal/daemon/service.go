@@ -1180,6 +1180,9 @@ func (s *Service) pollTracked(ctx context.Context) {
 	for _, thread := range threads {
 		snapshot, _ := s.store.GetSnapshot(ctx, thread.ID)
 		catchup := s.threadNeedsCatchupPolling(ctx, thread, snapshot)
+		if !trackedThreadPollDue(snapshot, catchup, time.Now().UTC()) {
+			continue
+		}
 		if snapshot != nil && snapshot.LastRichLiveEventAt != "" {
 			if time.Since(parseTime(snapshot.LastRichLiveEventAt)) < maxDuration(10*time.Second, s.cfg.ObserverPollInterval*2) {
 				continue
@@ -1245,6 +1248,20 @@ func (s *Service) pollTracked(ctx context.Context) {
 			s.syncThreadPanel(ctx, current.Thread.ID)
 		}
 	}
+}
+
+func trackedThreadPollDue(snapshot *model.ThreadSnapshotState, catchup bool, now time.Time) bool {
+	if catchup || snapshot == nil {
+		return true
+	}
+	deadline := parseTime(snapshot.NextPollAfter)
+	if deadline.IsZero() {
+		return true
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !now.UTC().Before(deadline)
 }
 
 func (s *Service) processDeliveryBatch(ctx context.Context) {

@@ -302,6 +302,18 @@ func TestTelegramEmptyInterruptedGateGraceExpiryAccepts(t *testing.T) {
 	if state.EmptyInterruptedSeenCount != 2 {
 		t.Fatalf("EmptyInterruptedSeenCount = %d, want 2", state.EmptyInterruptedSeenCount)
 	}
+
+	decision, err = service.decideTelegramOriginEmptyInterruptedTerminal(ctx, &snapshot, now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("decideTelegramOriginEmptyInterruptedTerminal(repeated expired) failed: %v", err)
+	}
+	if decision.Action != terminalGateAccept || decision.Reason != "grace_expired" {
+		t.Fatalf("repeated expired decision = %#v, want stable grace_expired accept", decision)
+	}
+	stable := loadTerminalGateState(t, service, ctx, terminalGateDeferKey("thread-expiry", "turn-expiry"))
+	if stable.EmptyInterruptedSeenCount != state.EmptyInterruptedSeenCount || stable.LastSeenAt != state.LastSeenAt {
+		t.Fatalf("repeated expired state changed from %#v to %#v", state, stable)
+	}
 }
 
 func terminalGateTestSnapshot(threadID, turnID, status string) appserver.ThreadReadSnapshot {

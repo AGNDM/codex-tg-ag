@@ -437,6 +437,16 @@ Slice gate:
 
 - Each v0.2.0 live-event slice must add or update tests first, pass targeted checks, run the relevant live Telegram E2E case, and only then be committed.
 
+## Background Polling Backpressure
+
+- A future snapshot `next_poll_after` suppresses a redundant full thread read.
+- Missing, malformed, and overdue deadlines remain pollable.
+- Newer indexed thread metadata bypasses a future deadline for catch-up.
+- Repeated observations of the same accepted `grace_expired` interrupted turn
+  do not mutate its persisted terminal-gate state.
+- Compact snapshots omit duplicate `Thread.Raw`, while older panel Details can
+  still reconstruct a turn from the separately stored thread history.
+
 ## Baseline Commands
 
 Run before commit or publish:

@@ -346,7 +346,13 @@ func CompactSnapshot(previous *model.ThreadSnapshotState, current ThreadReadSnap
 	if current.WaitingOnReply && current.PlanPrompt != nil {
 		out.LastReplyFP = current.PlanPrompt.Fingerprint
 	}
-	raw, _ := json.Marshal(current)
+	// The full thread/read payload is already persisted in threads.raw_json.
+	// Keeping it again inside the compact snapshot duplicates the complete turn
+	// history on every poll. Leave Raw empty so older-panel reconstruction uses
+	// its existing fallback to the separately persisted thread payload.
+	compact := current
+	compact.Thread.Raw = nil
+	raw, _ := json.Marshal(compact)
 	out.CompactJSON = raw
 	return out
 }

@@ -2132,6 +2132,80 @@ func TestPollTrackedDefersTelegramOriginEmptyInterruptedAndKeepsActiveState(t *t
 	}
 }
 
+func TestPollTrackedHonorsDeadlineAndCatchupBypassesIt(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	thread := model.Thread{
+		ID:          "thread-poll-deadline",
+		Title:       "Poll deadline",
+		ProjectName: "Codex",
+		CWD:         "/Users/example/project",
+		UpdatedAt:   now.Unix(),
+		Status:      "idle",
+	}
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	if err := service.store.SetBinding(ctx, 42, 7, thread.ID, model.BindingModeBound); err != nil {
+		t.Fatalf("SetBinding failed: %v", err)
+	}
+	state := appserver.CompactSnapshot(nil, appserver.ThreadReadSnapshot{
+		Thread: thread,
+	}, now)
+	state.NextPollAfter = model.TimeString(now.Add(time.Minute).Format(time.RFC3339Nano))
+	if err := service.store.UpsertSnapshot(ctx, thread.ID, state); err != nil {
+		t.Fatalf("UpsertSnapshot failed: %v", err)
+	}
+	stub := &stubSession{threadReads: map[string]map[string]any{
+		thread.ID: diagnosticThreadReadPayload(thread, "", ""),
+	}}
+	service.poll = stub
+	service.pollConnected = true
+
+	service.pollTracked(ctx)
+	if stub.threadReadCalls != 0 {
+		t.Fatalf("future deadline ThreadRead calls = %d, want 0", stub.threadReadCalls)
+	}
+
+	thread.UpdatedAt++
+	if err := service.store.UpsertThread(ctx, thread); err != nil {
+		t.Fatalf("UpsertThread(catchup) failed: %v", err)
+	}
+	stub.threadReads[thread.ID] = diagnosticThreadReadPayload(thread, "", "")
+	service.pollTracked(ctx)
+	if stub.threadReadCalls != 1 {
+		t.Fatalf("catchup ThreadRead calls = %d, want 1", stub.threadReadCalls)
+	}
+}
+
+func TestTrackedThreadPollDueDefaultsSafely(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 23, 7, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		snapshot *model.ThreadSnapshotState
+		catchup  bool
+		want     bool
+	}{
+		{name: "missing snapshot", want: true},
+		{name: "missing deadline", snapshot: &model.ThreadSnapshotState{}, want: true},
+		{name: "malformed deadline", snapshot: &model.ThreadSnapshotState{NextPollAfter: "not-a-time"}, want: true},
+		{name: "overdue", snapshot: &model.ThreadSnapshotState{NextPollAfter: model.TimeString(now.Add(-time.Second).Format(time.RFC3339Nano))}, want: true},
+		{name: "future", snapshot: &model.ThreadSnapshotState{NextPollAfter: model.TimeString(now.Add(time.Second).Format(time.RFC3339Nano))}, want: false},
+		{name: "catchup bypass", snapshot: &model.ThreadSnapshotState{NextPollAfter: model.TimeString(now.Add(time.Hour).Format(time.RFC3339Nano))}, catchup: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := trackedThreadPollDue(tc.snapshot, tc.catchup, now); got != tc.want {
+				t.Fatalf("trackedThreadPollDue() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPollTrackedDeferredInterruptedDoesNotOverwriteFreshLiveToolSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -5267,6 +5341,7 @@ type stubSession struct {
 	threadListCursor       string
 	threadReadID           string
 	threadReadIncludeTurns bool
+	threadReadCalls        int
 	models                 []appserver.ModelOption
 	modelListErr           error
 	collaborationModes     []appserver.CollaborationModeOption
@@ -5325,6 +5400,7 @@ func (s *stubSession) ThreadProjectUpdate(ctx context.Context, threadID, project
 	return map[string]any{}, nil
 }
 func (s *stubSession) ThreadRead(ctx context.Context, threadID string, includeTurns bool) (map[string]any, error) {
+	s.threadReadCalls++
 	s.threadReadID = threadID
 	s.threadReadIncludeTurns = includeTurns
 	if s.threadReadErr != nil {

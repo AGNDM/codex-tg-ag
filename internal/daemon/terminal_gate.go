@@ -249,6 +249,22 @@ func (s *Service) decideTelegramOriginEmptyInterruptedTerminal(ctx context.Conte
 		return decision, nil
 	}
 
+	// Once the grace window has expired, keep the accepted state as a
+	// tombstone for this exact turn. Bound threads are polled periodically, so
+	// rewriting the same terminal decision on every observation creates
+	// unbounded state churn without changing the outcome. A later non-
+	// interrupted snapshot still takes the recovery path above and clears it.
+	if hasExisting &&
+		strings.EqualFold(strings.TrimSpace(existing.LastDecision), string(terminalGateAccept)) &&
+		strings.EqualFold(strings.TrimSpace(existing.LastReason), "grace_expired") {
+		decision.Action = terminalGateAccept
+		decision.Reason = "grace_expired"
+		decision.FirstSeenAt = parseTime(existing.FirstSeenAt)
+		decision.LastSeenAt = parseTime(existing.LastSeenAt)
+		decision.ExpiresAt = parseTime(existing.ExpiresAt)
+		return decision, nil
+	}
+
 	state := existing
 	if !hasExisting {
 		reason := interruptedDeferReason(snapshot)
