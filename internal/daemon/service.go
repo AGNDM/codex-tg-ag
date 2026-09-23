@@ -1731,7 +1731,7 @@ func selectedModelOption(models []appserver.ModelOption, value string) (appserve
 }
 
 func allReasoningEfforts() []string {
-	return []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+	return []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 }
 
 func normalizeReasoningEffort(value string) string {

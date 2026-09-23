@@ -12,13 +12,13 @@ The Lead's durable identity is its Telegram topic, Codex thread, and bound Codex
 
 ## Decision
 
-- New Leads continue to default to `gpt-5.6-sol` with `medium` reasoning.
+- New Leads default to `gpt-6-sol` with `medium` reasoning. Existing Leads retain their persisted model until the operator changes it.
 - The operator may change a Lead to any non-hidden model returned by App Server `model/list`.
-- `/agent model` accepts a full model ID and the convenience aliases `sol`, `luna`, and `astra`.
+- `/agent model` accepts a full model ID. The convenience aliases `sol`, `luna`, and `astra` resolve to `gpt-6-sol`, `gpt-6-luna`, and `gpt-6-astra`; explicit GPT-5.6 model IDs remain valid when App Server advertises them.
 - When reasoning effort is omitted, the daemon stores the selected model's advertised default. An explicitly supplied effort must be supported by that model when the catalog provides supported values.
 - A model change applies to new turns and preserves the Lead's topic, thread, Project, history, policy, and authority.
 - Native custom-agent names such as `luna_executor` and `astra_advisor` remain delegation roles. They are not model IDs and selecting the same underlying model does not import their role instructions.
-- `lead-default` version 3 uses model-neutral Lead wording while preserving delegation, escalation, review, and critical-path approval rules.
+- `lead-default` version 4 records the GPT-6 Sol creation default while preserving model-neutral Lead authority, delegation, escalation, review, and critical-path approval rules.
 
 ## Consequences
 

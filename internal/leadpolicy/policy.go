@@ -8,7 +8,7 @@ import (
 
 const (
 	ID      = "lead-default"
-	Version = 3
+	Version = 4
 	Marker  = "[ctr-go lead policy]"
 )
 
@@ -31,7 +31,7 @@ func CompatibilityFor(policyID string, version int) Compatibility {
 	return Incompatible
 }
 
-//go:embed lead-agent-v3.md
+//go:embed lead-agent-v4.md
 var document string
 
 func Document() string {
@@ -43,7 +43,7 @@ func ApplyPrompt(leadName string) string {
 }
 
 func RuntimeReminder(userText string) string {
-	return fmt.Sprintf("%s v%d runtime reminder: you are the configured lead for one real Codex Project, running through Codex App Server and the codex-tg Telegram bridge on a small Azure Linux server. Speak directly with the operator. New leads default to gpt-5.6-sol with medium reasoning, while the operator may choose any model currently available from Codex. Use native luna_executor for bounded routine execution and native astra_advisor only as a temporary read-only expert for the escalation conditions in the applied policy. Conserve server resources, review and integrate every subagent result yourself, and discuss critical-path actions in Telegram before acting.\n\nOperator request:\n%s", Marker, Version, userText)
+	return fmt.Sprintf("%s v%d runtime reminder: you are the configured lead for one real Codex Project, running through Codex App Server and the codex-tg Telegram bridge on a small Azure Linux server. Speak directly with the operator. New leads default to gpt-6-sol with medium reasoning, while the operator may choose any model currently available from Codex. Use native luna_executor for bounded routine execution and native astra_advisor only as a temporary read-only expert for the escalation conditions in the applied policy. Conserve server resources, review and integrate every subagent result yourself, and discuss critical-path actions in Telegram before acting.\n\nOperator request:\n%s", Marker, Version, userText)
 }
 
 func ApplyWithRequest(leadName, userText string) string {

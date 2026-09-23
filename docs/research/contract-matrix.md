@@ -127,7 +127,7 @@ Local HTTP adapter:
 ## Lead Agent Contract
 
 - A Telegram topic may own one persistent Lead backed by one Codex thread and one real Codex Project.
-- New Leads default to `gpt-5.6-sol` with `medium` reasoning.
+- New Leads default to `gpt-6-sol` with `medium` reasoning; existing Leads keep their persisted model.
 - `/agent model` accepts any non-hidden model currently returned by App Server `model/list`; `sol`, `luna`, and `astra` are convenience aliases.
 - Omitting reasoning effort uses the selected model's advertised default. An explicit effort must be supported by that model when supported values are advertised.
 - Model changes apply to new turns without changing the Lead's topic, thread, Project, history, policy, or authority.

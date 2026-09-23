@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultLeadModel     = "gpt-5.6-sol"
+	defaultLeadModel     = "gpt-6-sol"
 	defaultLeadReasoning = "medium"
 	defaultLeadStatus    = "initializing"
 	leadModelUsage       = "Usage: /agent model <model-id|sol|luna|astra> [effort]"
@@ -135,10 +135,10 @@ func (s *Service) updateLeadAgentModel(ctx context.Context, chatID, topicID int6
 	}
 	modelID := strings.TrimSpace(fields[0])
 	switch strings.ToLower(fields[0]) {
-	case "sol", "gpt-5.6-sol":
-		modelID = "gpt-5.6-sol"
-	case "luna", "gpt-5.6-luna":
-		modelID = "gpt-5.6-luna"
+	case "sol", "gpt-6-sol":
+		modelID = "gpt-6-sol"
+	case "luna", "gpt-6-luna":
+		modelID = "gpt-6-luna"
 	case "astra", "gpt-6-astra":
 		modelID = "gpt-6-astra"
 	}

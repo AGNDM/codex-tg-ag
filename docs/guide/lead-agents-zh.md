@@ -6,15 +6,15 @@
 
 | Agent | 默认模型 | 默认推理强度 | 默认项目 | 当前职责由谁决定 |
 |---|---|---|---|---|
-| Axiom | `gpt-5.6-sol` | `medium` | Axiom Codex Project | 你在 Axiom topic 中布置 |
-| Gnome | `gpt-5.6-sol` | `medium` | Gnome Codex Project | 你在 Gnome topic 中布置 |
-| Dreamer | `gpt-5.6-sol` | `medium` | Dreamer Codex Project | 你在 Dreamer topic 中布置 |
+| Axiom | 持久配置 | `medium` | Axiom Codex Project | 你在 Axiom topic 中布置 |
+| Gnome | 持久配置 | `medium` | Gnome Codex Project | 你在 Gnome topic 中布置 |
+| Dreamer | 持久配置 | `medium` | Dreamer Codex Project | 你在 Dreamer topic 中布置 |
 
 Axiom 的 Project 已指定为本仓库的长期开发与维护 Project；其接管范围、服务器环境、验证流程和首个审计任务见 [`docs/handoff/axiom-telegram-agent.md`](../handoff/axiom-telegram-agent.md)。Gnome 与 Dreamer 保持各自独立 Project，不参与本仓库的日常所有权。
 
-默认政策 `lead-default v3`：大 Agent 负责与你讨论、规划、复核和汇报。它知道自己运行在资源有限的 Azure Linux 小服务器上，由 Codex、Codex App Server 和 `codex-tg` Telegram bridge 组成；Telegram 是交互与控制层，Codex 才是 turn、工具、sandbox、审批和原生子代理的运行时。每个 Lead 的持久 thread 一对一绑定真实 Codex Project，并以 Project roots、thread 历史、`AGENTS.md` 和仓库文档作为稳定上下文。
+默认政策 `lead-default v4`：大 Agent 负责与你讨论、规划、复核和汇报。它知道自己运行在资源有限的 Azure Linux 小服务器上，由 Codex、Codex App Server 和 `codex-tg` Telegram bridge 组成；Telegram 是交互与控制层，Codex 才是 turn、工具、sandbox、审批和原生子代理的运行时。每个 Lead 的持久 thread 一对一绑定真实 Codex Project，并以 Project roots、thread 历史、`AGENTS.md` 和仓库文档作为稳定上下文。
 
-Lead 通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。新 Lead 默认使用 Sol medium，但你可以切换为 Codex 当前提供的任意模型；Lead 仍是唯一与你对话并整合子代理结果的角色。为适应小服务器，通常一次只运行一个子代理，确有独立性和时间收益时才并发两个。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
+Lead 通过 Codex 原生 custom agent `luna_executor`（Luna low）处理范围明确的日常执行，通过只读的 `astra_advisor`（Astra low）临时咨询架构权衡、冲突约束、两次认真尝试后仍未解决的问题和高风险审查。新 Lead 默认使用 GPT-6 Sol medium，但你可以切换为 Codex 当前提供的任意模型；Lead 仍是唯一与你对话并整合子代理结果的角色。为适应小服务器，通常一次只运行一个子代理，确有独立性和时间收益时才并发两个。push、merge、deploy、付费、删除数据、生产变更等关键动作必须先在 Telegram 中与你讨论。
 
 Lead 的 Telegram turn 默认使用 Codex 原生 `workspaceWrite`，可写范围限定为其绑定的 Project root，并使用 `on-request + auto_review` 处理低风险审批。因此 Lead 和 Luna 可以在 Project 内编辑、运行测试和创建本地 commit；Astra 始终只读。Git push、merge 和部署仍不属于自动许可，必须先向你说明具体动作并获得批准。
 
@@ -91,7 +91,7 @@ Lead 的 Telegram turn 默认使用 Codex 原生 `workspaceWrite`，可写范围
 /agent model 完整模型ID [推理强度]
 ```
 
-`sol`、`luna`、`astra` 是常用模型快捷名，也可以直接使用 `/model` 当前列出的完整模型 ID。切换时省略推理强度，会采用目标模型由 App Server 公布的默认值；显式指定的值必须受该模型支持。模型切换不会改变 Lead 的 topic、thread、Project、历史或权限。`luna_executor` 和 `astra_advisor` 是独立的委派角色名称，不等同于 Lead 模型 ID。
+`sol`、`luna`、`astra` 分别指向 `gpt-6-sol`、`gpt-6-luna`、`gpt-6-astra`，也可以直接使用 `/model` 当前列出的完整模型 ID。显式输入 `gpt-5.6-sol` 或 `gpt-5.6-luna` 时，只要 App Server 仍然公布该模型，旧模型仍可使用。切换时省略推理强度，会采用目标模型由 App Server 公布的默认值；显式指定的值必须受该模型支持。模型切换不会改变 Lead 的 topic、thread、Project、历史或权限。`luna_executor` 和 `astra_advisor` 是独立的委派角色名称，不等同于 Lead 模型 ID。
 
 模型切换从下一个新 turn 生效。如果 Agent 当前正在执行，普通消息通常会 steer 到当前 turn，而不会中途替换模型。
 

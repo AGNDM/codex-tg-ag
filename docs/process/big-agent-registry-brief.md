@@ -6,7 +6,7 @@ An operator can bind Telegram chats and topics to Codex threads, but cannot mana
 
 ## Goal
 
-Add a durable agent registry that binds a named lead agent to a Telegram topic and Codex thread, records its current project and policy, and makes that identity visible in Telegram. New Leads default to `gpt-5.6-sol` with `medium` reasoning; the operator may select any model currently available from Codex. Subagent activity remains an internal implementation detail unless the lead reports it.
+Add a durable agent registry that binds a named lead agent to a Telegram topic and Codex thread, records its current project and policy, and makes that identity visible in Telegram. New Leads default to `gpt-6-sol` with `medium` reasoning; the operator may select any model currently available from Codex. Subagent activity remains an internal implementation detail unless the lead reports it.
 
 ## Non-goals
 

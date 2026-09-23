@@ -4974,12 +4974,12 @@ func TestLeadAgentReadCommands(t *testing.T) {
 		{
 			ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 7,
 			ThreadID: "thread-builder", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-			ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 3,
+			ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 		},
 		{
 			ID: "lead-research", Name: "Research", ChatID: 123456789, TopicID: 8,
 			ThreadID: "thread-research", Model: "gpt-6-astra", ReasoningEffort: "low",
-			ProjectID: "project-market", Status: "working", PolicyID: "lead-default", PolicyVersion: 3,
+			ProjectID: "project-market", Status: "working", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 		},
 	}
 	for _, agent := range agents {
@@ -5003,7 +5003,7 @@ func TestLeadAgentReadCommands(t *testing.T) {
 		t.Fatalf("handleCommand(/agent show) failed: %v", err)
 	}
 	policy, err := service.handleCommand(ctx, 123456789, 7, "/agent policy", 0)
-	if err != nil || !strings.Contains(policy.Text, "Lead policy: lead-default v3") || !strings.Contains(policy.Text, "Status: current") {
+	if err != nil || !strings.Contains(policy.Text, "Lead policy: lead-default v4") || !strings.Contains(policy.Text, "Status: current") {
 		t.Fatalf("/agent policy = %#v err=%v", policy, err)
 	}
 	for _, want := range []string{"Lead: Builder", "gpt-5.6-sol", "medium", "telegram-agent", "thread-builder"} {
@@ -5036,7 +5036,7 @@ func TestLeadAgentReadCommands(t *testing.T) {
 	}
 }
 
-func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
+func TestCreateLeadAgentStartsPersistentGPT6SolThread(t *testing.T) {
 	t.Parallel()
 
 	service := newTestService(t)
@@ -5063,7 +5063,7 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 		t.Fatalf("turnStartCalls = %#v, want one initialization turn", stub.turnStartCalls)
 	}
 	turn := stub.turnStartCalls[0]
-	if turn.model != "gpt-5.6-sol" || turn.reasoningEffort != "medium" {
+	if turn.model != "gpt-6-sol" || turn.reasoningEffort != "medium" {
 		t.Fatalf("initialization model = %q effort = %q, want Sol medium", turn.model, turn.reasoningEffort)
 	}
 	for _, want := range []string{"Lead Agent Policy", "luna_executor", "astra_advisor", "Critical path"} {
@@ -5075,7 +5075,7 @@ func TestCreateLeadAgentStartsPersistentSolThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLeadAgentByTopic failed: %v", err)
 	}
-	if agent == nil || agent.Name != "Builder" || agent.ThreadID != "lead-thread" || agent.Model != "gpt-5.6-sol" || agent.PolicyID != "lead-default" || agent.PolicyVersion != 3 {
+	if agent == nil || agent.Name != "Builder" || agent.ThreadID != "lead-thread" || agent.Model != "gpt-6-sol" || agent.PolicyID != "lead-default" || agent.PolicyVersion != leadpolicy.Version {
 		t.Fatalf("stored agent = %#v, want Builder Sol lead", agent)
 	}
 	binding, err := service.store.GetBinding(ctx, 123456789, 21)
@@ -5132,14 +5132,14 @@ func TestLeadPolicyStatusAndApplyUsePersistentThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("policy apply failed: %v", err)
 	}
-	if response.TurnID == "" || !strings.Contains(response.Text, "Applying lead-default v3") {
+	if response.TurnID == "" || !strings.Contains(response.Text, "Applying lead-default v4") {
 		t.Fatalf("policy apply response = %#v", response)
 	}
 	if len(stub.turnStartCalls) != 1 || !strings.Contains(stub.turnStartCalls[0].message, "luna_executor") || !strings.Contains(stub.turnStartCalls[0].message, "astra_advisor") {
 		t.Fatalf("policy turn = %#v", stub.turnStartCalls)
 	}
 	stored, err := service.store.GetLeadAgentByTopic(ctx, agent.ChatID, agent.TopicID)
-	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != 3 {
+	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != leadpolicy.Version {
 		t.Fatalf("stored policy = %#v err=%v", stored, err)
 	}
 }
@@ -5151,7 +5151,7 @@ func TestCurrentLeadPolicyAddsRuntimeReminder(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-reminder", Name: "Reminder", ChatID: 123456789, TopicID: 52,
 		ThreadID: "lead-reminder-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-reminder", Status: "idle", PolicyID: "lead-default", PolicyVersion: 3,
+		ProjectID: "project-reminder", Status: "idle", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -5292,7 +5292,7 @@ func TestOutdatedLeadPolicyUpgradesOnNextRequest(t *testing.T) {
 		t.Fatalf("upgrade turn = %#v", stub.turnStartCalls)
 	}
 	stored, err := service.store.GetLeadAgentByTopic(ctx, agent.ChatID, agent.TopicID)
-	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != 3 {
+	if err != nil || stored.PolicyID != "lead-default" || stored.PolicyVersion != leadpolicy.Version {
 		t.Fatalf("stored policy = %#v err=%v", stored, err)
 	}
 }
@@ -5311,7 +5311,7 @@ func TestLeadAgentRouteOverridesGlobalLunaModel(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
 		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 3,
+		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -5342,7 +5342,7 @@ func TestLeadAgentProjectRootComesFromCodexProject(t *testing.T) {
 	agent := model.LeadAgent{
 		ID: "lead-builder", Name: "Builder", ChatID: 123456789, TopicID: 31,
 		ThreadID: "lead-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: 3,
+		ProjectID: "project-telegram", Status: "idle", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -5366,8 +5366,8 @@ func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 	ctx := context.Background()
 	agent := model.LeadAgent{
 		ID: "lead-axiom", Name: "Axiom", ChatID: 123456789, TopicID: 41,
-		ThreadID: "axiom-thread", Model: "gpt-5.6-sol", ReasoningEffort: "medium",
-		ProjectID: "project-workspace", Status: "initializing", PolicyID: "lead-default", PolicyVersion: 3,
+		ThreadID: "axiom-thread", Model: "gpt-6-sol", ReasoningEffort: "medium",
+		ProjectID: "project-workspace", Status: "initializing", PolicyID: "lead-default", PolicyVersion: leadpolicy.Version,
 	}
 	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateLeadAgent failed: %v", err)
@@ -5376,6 +5376,8 @@ func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 		t.Fatalf("UpsertThread failed: %v", err)
 	}
 	stub := &stubSession{models: []appserver.ModelOption{
+		{ID: "gpt-6-sol", DefaultReasoningEffort: "medium", SupportedReasoningEffort: []string{"none", "low", "medium", "high", "xhigh", "max"}},
+		{ID: "gpt-6-luna", DefaultReasoningEffort: "medium", SupportedReasoningEffort: []string{"none", "low", "medium", "high", "xhigh", "max"}},
 		{ID: "gpt-5.6-sol", DefaultReasoningEffort: "medium", SupportedReasoningEffort: []string{"low", "medium", "high"}},
 		{ID: "gpt-5.6-luna", DefaultReasoningEffort: "low", SupportedReasoningEffort: []string{"low", "medium"}},
 		{ID: "gpt-6-astra", DefaultReasoningEffort: "low", SupportedReasoningEffort: []string{"low", "medium", "high"}},
@@ -5406,8 +5408,26 @@ func TestLeadAgentModelAndLifecycleStatus(t *testing.T) {
 		t.Fatalf("Luna /agent model failed: %v", err)
 	}
 	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if stored.Model != "gpt-6-luna" || stored.ReasoningEffort != "medium" {
+		t.Fatalf("stored Luna model = %q effort = %q, want GPT-6 Luna medium", stored.Model, stored.ReasoningEffort)
+	}
+
+	changed, err = service.handleCommand(ctx, 123456789, 41, "/agent model sol max", 0)
+	if err != nil {
+		t.Fatalf("Sol /agent model failed: %v", err)
+	}
+	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
+	if stored.Model != "gpt-6-sol" || stored.ReasoningEffort != "max" {
+		t.Fatalf("stored Sol model = %q effort = %q, want GPT-6 Sol max", stored.Model, stored.ReasoningEffort)
+	}
+
+	changed, err = service.handleCommand(ctx, 123456789, 41, "/agent model gpt-5.6-luna low", 0)
+	if err != nil {
+		t.Fatalf("legacy Luna /agent model failed: %v", err)
+	}
+	stored, _ = service.store.GetLeadAgentByTopic(ctx, 123456789, 41)
 	if stored.Model != "gpt-5.6-luna" || stored.ReasoningEffort != "low" {
-		t.Fatalf("stored Luna model = %q effort = %q", stored.Model, stored.ReasoningEffort)
+		t.Fatalf("stored legacy Luna model = %q effort = %q", stored.Model, stored.ReasoningEffort)
 	}
 
 	changed, err = service.handleCommand(ctx, 123456789, 41, "/agent model gpt-custom minimal", 0)
