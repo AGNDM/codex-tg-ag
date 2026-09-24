@@ -40,7 +40,7 @@ This file now serves two purposes:
 - `/agent show`
 - `/agent project [project]`
 - `/agent model <model-id|sol|luna|astra> [effort]`
-- `/agent policy [apply]`
+- `/agent policy [apply|install]`
 
 ## Aliases and adjacent commands
 
@@ -133,6 +133,9 @@ Local HTTP adapter:
 - Model changes apply to new turns without changing the Lead's topic, thread, Project, history, policy, or authority.
 - Native custom-agent names are delegation roles, not Lead model IDs.
 - Lead Policy v3 is model-neutral and preserves native delegation, review, and critical-path approval requirements.
+- `/agent policy install` creates the standard project-v1 `AGENTS.md` only when
+  the current Lead's bound Codex Project root has no existing entry. Existing
+  Project instructions are never overwritten or automatically appended.
 
 ## Telegram Adapter Contract
 

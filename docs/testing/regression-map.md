@@ -241,6 +241,10 @@ Primary tests:
 - `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
 - `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
 - `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`
+- `internal/daemon/project_agent_policy_test.go::TestInstallProjectAgentPolicyCreatesCompleteFile`
+- `internal/daemon/project_agent_policy_test.go::TestInstallProjectAgentPolicyNeverOverwritesExistingEntry`
+- `internal/daemon/service_test.go::TestLeadProjectPolicyInstallCreatesMissingAgentsFile`
+- `internal/daemon/service_test.go::TestLeadProjectPolicyInstallPreservesExistingAgentsFile`
 - `internal/daemon/service_test.go::TestCurrentLeadPolicyAddsRuntimeReminder`
 - `internal/daemon/service_test.go::TestLeadAgentModelAndLifecycleStatus`
 
@@ -248,6 +252,9 @@ Contract notes:
 
 - Codex native subagent tools own spawn, wait, steering, and result consolidation.
 - The daemon stores a policy id/version, not mutable free-form policy text.
+- `/agent policy install` exclusively creates the standard `AGENTS.md` in the
+  current Lead's authoritative bound Project root and never changes an existing
+  entry. New turns then use compact project-v1/file-v2 prompts.
 - `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
 - Lead Policy v3 identifies the environment and durable context, keeps Sol medium as the creation default, and permits any model currently advertised by App Server.
 - Telegram-started Lead turns explicitly restore Codex `workspaceWrite` for the bound Project root with `on-request` plus `auto_review`, so a sticky read-only audit turn cannot block later edits; ordinary threads are not broadened.

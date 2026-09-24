@@ -1,6 +1,6 @@
 # Project Policy v2 Adoption Bug
 
-Status: queued after the file-delivery root/retry fix.
+Status: implemented locally; CI and live Telegram validation pending.
 
 ## Symptom
 
@@ -27,3 +27,15 @@ nonce-free protocol v2 from their root `AGENTS.md`.
 - Legacy Projects and in-flight v1 turns remain compatible.
 - Tests cover at least two different bound Projects so the result is not tied
   to Axiom's Project root.
+
+## Decision
+
+Add an explicit `/agent policy install` command. It resolves only the current
+Lead's bound Codex Project root through App Server and creates a complete,
+public-safe `AGENTS.md` template with exclusive-create semantics. It never
+overwrites or appends to an existing file, symlink, directory, or other entry;
+existing Project rules require a manual merge.
+
+`/agent project` reports whether the selected Project uses legacy prompts or
+has adopted `project-v1`. `/agent policy` reports the same status. Installation
+affects new turns only; a running protocol-v1 turn keeps its frozen nonce.

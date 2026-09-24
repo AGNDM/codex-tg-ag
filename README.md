@@ -174,7 +174,7 @@ go run ./cmd/ctr-go daemon run
 Telegram commands:
 
 - `/start`, `/help`
-- `/agents`, `/agent create`, `/agent show`, `/agent project`, `/agent model`, `/agent policy`
+- `/agents`, `/agent create`, `/agent show`, `/agent project`, `/agent model`, `/agent policy` (`apply` or `install`)
 - `/threads`, `/projects`, `/new`, `/newchat`, `/newthread`, `/show`, `/bind`, `/reply`, `/plan`
 - `/settings`, `/model`, `/effort`
 - `/context`, `/whereami`

@@ -5144,6 +5144,76 @@ func TestLeadPolicyStatusAndApplyUsePersistentThread(t *testing.T) {
 	}
 }
 
+func TestLeadProjectPolicyInstallCreatesMissingAgentsFile(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	firstProject := t.TempDir()
+	secondProject := t.TempDir()
+	first := model.LeadAgent{
+		ID: "lead-policy-install-first", Name: "First", ChatID: 123456789, TopicID: 64,
+		ThreadID: "thread-policy-install-first", Model: "gpt-5.6-sol", ProjectID: "project-policy-install-first", Status: "idle",
+	}
+	second := model.LeadAgent{
+		ID: "lead-policy-install-second", Name: "Second", ChatID: 123456789, TopicID: 66,
+		ThreadID: "thread-policy-install-second", Model: "gpt-5.6-sol", ProjectID: "project-policy-install-second", Status: "idle",
+	}
+	if err := service.store.CreateLeadAgent(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.CreateLeadAgent(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": first.ProjectID, "roots": []any{map[string]any{"path": firstProject}}},
+		map[string]any{"id": second.ProjectID, "roots": []any{map[string]any{"path": secondProject}}},
+	}}}
+	service.live = stub
+	service.liveConnected = true
+
+	response, err := service.handleCommand(ctx, first.ChatID, first.TopicID, "/agent policy install", 0)
+	if err != nil || !strings.Contains(response.Text, "Installed Project policy project-v1") {
+		t.Fatalf("install response = %#v, err = %v", response, err)
+	}
+	if adoptedProjectAgentPolicy(firstProject) != projectAgentPolicyVersion || adoptedProjectAgentPolicy(secondProject) != 0 {
+		t.Fatal("first Lead installation did not stay within its bound Project")
+	}
+	response, err = service.handleCommand(ctx, second.ChatID, second.TopicID, "/agent policy install", 0)
+	if err != nil || adoptedProjectAgentPolicy(secondProject) != projectAgentPolicyVersion {
+		t.Fatalf("second Project install response = %#v, err = %v", response, err)
+	}
+	again, err := service.handleCommand(ctx, first.ChatID, first.TopicID, "/agent policy install", 0)
+	if err != nil || !strings.Contains(again.Text, "already installed") {
+		t.Fatalf("repeat response = %#v, err = %v", again, err)
+	}
+}
+
+func TestLeadProjectPolicyInstallPreservesExistingAgentsFile(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	path := filepath.Join(project, "AGENTS.md")
+	if err := os.WriteFile(path, []byte("project-specific rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := model.LeadAgent{ID: "lead-policy-existing", Name: "Existing", ChatID: 123456789, TopicID: 65, ThreadID: "thread-policy-existing", Model: "gpt-5.6-sol", ProjectID: "project-policy-existing", Status: "idle"}
+	if err := service.store.CreateLeadAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	service.live = &stubSession{projectListResult: map[string]any{"data": []any{
+		map[string]any{"id": agent.ProjectID, "roots": []any{map[string]any{"path": project}}},
+	}}}
+	service.liveConnected = true
+
+	response, err := service.handleCommand(ctx, agent.ChatID, agent.TopicID, "/agent policy install", 0)
+	if err != nil || !strings.Contains(response.Text, "was not changed") {
+		t.Fatalf("install response = %#v, err = %v", response, err)
+	}
+	body, readErr := os.ReadFile(path)
+	if readErr != nil || string(body) != "project-specific rules\n" {
+		t.Fatalf("existing AGENTS.md changed: %q, %v", body, readErr)
+	}
+}
+
 func TestCurrentLeadPolicyAddsRuntimeReminder(t *testing.T) {
 	t.Parallel()
 	service := newTestService(t)

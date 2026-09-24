@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,56 @@ func TestAdoptedProjectAgentPolicyRequiresExactRegularRootMarker(t *testing.T) {
 	}
 	if got := adoptedProjectAgentPolicy(project); got != 0 {
 		t.Fatalf("directory policy = %d, want legacy", got)
+	}
+}
+
+func TestInstallProjectAgentPolicyCreatesCompleteFile(t *testing.T) {
+	project := t.TempDir()
+	if err := installProjectAgentPolicy(project); err != nil {
+		t.Fatalf("installProjectAgentPolicy failed: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(project, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if adoptedProjectAgentPolicy(project) != projectAgentPolicyVersion || !strings.Contains(text, "luna_executor") || !strings.Contains(text, `"version":2`) {
+		t.Fatalf("installed policy is incomplete: %s", text)
+	}
+	if !strings.HasSuffix(text, projectAgentPolicyMarker+"\n") {
+		t.Fatalf("marker must be written last: %q", text)
+	}
+}
+
+func TestInstallProjectAgentPolicyNeverOverwritesExistingEntry(t *testing.T) {
+	for _, entry := range []string{"file", "symlink", "directory"} {
+		t.Run(entry, func(t *testing.T) {
+			project := t.TempDir()
+			path := filepath.Join(project, "AGENTS.md")
+			switch entry {
+			case "file":
+				if err := os.WriteFile(path, []byte("existing rules\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Symlink(filepath.Join(t.TempDir(), "outside"), path); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := installProjectAgentPolicy(project); !errors.Is(err, errProjectAgentPolicyExists) {
+				t.Fatalf("install error = %v, want existing-file refusal", err)
+			}
+			if entry == "file" {
+				body, err := os.ReadFile(path)
+				if err != nil || string(body) != "existing rules\n" {
+					t.Fatalf("existing file changed: %q, %v", body, err)
+				}
+			}
+		})
 	}
 }
 

@@ -12,6 +12,10 @@ A Project may declare `Codex-TG Project Agent Policy: project-v1` as an exact
 line in its root `AGENTS.md`. Shared Agent rules then live in that native Project
 instruction file and Telegram inputs carry only a short role, policy, and file
 capability marker. Projects without a supported marker retain the full reminder.
+The explicit `/agent policy install` command can create the standard policy when
+the bound Project has no `AGENTS.md`. It uses the authoritative App Server
+Project root and exclusive creation; it never overwrites or appends to existing
+Project instructions, which must be merged manually.
 
 Policy version 2 also gives every lead a durable environment model: it runs on a small Azure Linux server, receives operator input through its Telegram topic, is backed by Codex and Codex App Server, and is bound one-to-one to a real Codex Project. The bridge remains a control and presentation layer rather than a competing agent runtime. Leads should conserve host resources and re-read deployed configuration and repository documentation before changing infrastructure assumptions.
 
