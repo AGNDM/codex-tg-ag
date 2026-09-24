@@ -321,6 +321,9 @@ func (s *Service) leadProjectPolicyRoot(ctx context.Context, agent model.LeadAge
 	if client == nil {
 		return "", fmt.Errorf("app-server session is not ready")
 	}
+	if s.cfg.RequestTimeout <= 0 {
+		return s.leadProjectRoot(ctx, client, agent.ChatID, agent.TopicID, agent.ThreadID)
+	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	return s.leadProjectRoot(requestCtx, client, agent.ChatID, agent.TopicID, agent.ThreadID)
