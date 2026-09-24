@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
@@ -173,6 +174,63 @@ func TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin(t *testing.T) {
 	route, err := service.store.ResolveMessageRoute(ctx, 42, 9, 1)
 	if err != nil || route == nil || route.ThreadID != thread.ID || route.TurnID != "turn-file" {
 		t.Fatalf("route = %#v, err = %v", route, err)
+	}
+}
+
+func TestProcessFinalFileDeliveriesUsesBoundCodexProjectRoot(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "report.txt"), []byte("project-root-body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	thread := model.Thread{ID: "thread-project-root", ProjectName: "Project", CWD: t.TempDir()}
+	if err := service.store.CreateLeadAgent(ctx, model.LeadAgent{
+		ID: "lead-project-root", Name: "Project Root", ChatID: 42, TopicID: 9,
+		ThreadID: thread.ID, Model: "gpt-5.6-sol", ProjectID: "project-root", Status: "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.store.PutTelegramTurnOrigin(ctx, model.TelegramTurnOrigin{ThreadID: thread.ID, TurnID: "turn-project-root", ChatID: 42, TopicID: 9, DeliveryNonce: "nonce-root"}); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubSession{projectListResult: map[string]any{"data": []any{map[string]any{
+		"id": "project-root", "name": "Project", "roots": []any{map[string]any{"path": project}},
+	}}}}
+	service.mu.Lock()
+	service.live = stub
+	service.liveConnected = true
+	service.mu.Unlock()
+	snapshot := &appserver.ThreadReadSnapshot{LatestTurnID: "turn-project-root", LatestTurnStatus: "completed", LatestFinalFP: "fp-root", LatestFinalText: "```codex-tg-file\n" + `{"version":1,"nonce":"nonce-root","files":[{"path":"report.txt"}]}` + "\n```"}
+	sender := &recordingSender{}
+
+	service.processFinalFileDeliveries(ctx, sender, thread, snapshot)
+
+	if len(sender.documents) != 1 || string(sender.documents[0].data) != "project-root-body" {
+		t.Fatalf("documents = %#v, want file from bound Codex Project root", sender.documents)
+	}
+}
+
+func TestOpenFileDeliveryWithRetryWaitsFiveSecondsAndRetriesOnce(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	waits := 0
+	wait := func(ctx context.Context, delay time.Duration) error {
+		waits++
+		if delay != 5*time.Second {
+			t.Fatalf("retry delay = %v, want 5s", delay)
+		}
+		return os.WriteFile(filepath.Join(project, "late.txt"), []byte("late-body"), 0o600)
+	}
+
+	file, _, err := openFileDeliveryWithRetry(ctx, project, "late.txt", wait)
+	if err != nil {
+		t.Fatalf("openFileDeliveryWithRetry failed: %v", err)
+	}
+	defer file.Close()
+	body, err := os.ReadFile(filepath.Join(project, "late.txt"))
+	if err != nil || waits != 1 || string(body) != "late-body" {
+		t.Fatalf("waits = %d, body = %q, err = %v", waits, body, err)
 	}
 }
 

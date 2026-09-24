@@ -10,12 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mideco-tech/codex-tg/internal/appserver"
 	"github.com/mideco-tech/codex-tg/internal/model"
 )
 
 const maxTelegramDocumentBytes int64 = 50_000_000
+
+const fileDeliveryOpenRetryDelay = 5 * time.Second
 
 type fileDeliveryProtocol struct {
 	Version int
@@ -245,6 +248,53 @@ type streamingDocumentSender interface {
 	SendDocumentStream(ctx context.Context, chatID, topicID int64, fileName string, reader io.Reader, caption string, options model.SendOptions) (int64, error)
 }
 
+func waitForFileDeliveryRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Service) fileDeliveryProjectRoot(ctx context.Context, thread model.Thread, origin *model.TelegramTurnOrigin) (string, error) {
+	agent, err := s.store.GetLeadAgentByTopic(ctx, origin.ChatID, origin.TopicID)
+	if err != nil {
+		return "", err
+	}
+	if agent == nil || agent.ThreadID != thread.ID || strings.TrimSpace(agent.ProjectID) == "" {
+		return thread.CWD, nil
+	}
+	client := s.settingsClient()
+	if client == nil {
+		return "", errors.New("app-server session is not ready to resolve the bound Codex Project")
+	}
+	root, err := s.leadProjectRoot(ctx, client, origin.ChatID, origin.TopicID, thread.ID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", errors.New("bound Codex Project has no root")
+	}
+	return root, nil
+}
+
+func openFileDeliveryWithRetry(ctx context.Context, projectRoot, path string, wait func(context.Context, time.Duration) error) (*os.File, os.FileInfo, error) {
+	file, info, err := openProjectDeliveryFile(projectRoot, path, maxTelegramDocumentBytes)
+	if err == nil {
+		return file, info, nil
+	}
+	if wait == nil {
+		wait = waitForFileDeliveryRetry
+	}
+	if waitErr := wait(ctx, fileDeliveryOpenRetryDelay); waitErr != nil {
+		return nil, nil, waitErr
+	}
+	return openProjectDeliveryFile(projectRoot, path, maxTelegramDocumentBytes)
+}
+
 func (s *Service) processFinalFileDeliveries(ctx context.Context, sender Sender, thread model.Thread, snapshot *appserver.ThreadReadSnapshot) string {
 	visible := strings.TrimSpace(snapshot.LatestFinalText)
 	if !strings.EqualFold(strings.TrimSpace(snapshot.LatestTurnStatus), "completed") {
@@ -271,13 +321,23 @@ func (s *Service) processFinalFileDeliveries(ctx context.Context, sender Sender,
 	if err != nil {
 		return appendDeliveryStatus(visible, "File delivery conflict: "+err.Error())
 	}
+	if len(claimed) == 0 {
+		return visible
+	}
 	streamer, ok := sender.(streamingDocumentSender)
-	for _, delivery := range claimed {
-		if !ok {
+	if !ok {
+		for _, delivery := range claimed {
 			_ = s.store.UpdateFileDelivery(ctx, thread.ID, snapshot.LatestTurnID, delivery.DirectiveIndex, model.FileDeliveryFailed, 0, "Telegram sender does not support streaming documents")
+		}
+		return visible
+	}
+	projectRoot, rootErr := s.fileDeliveryProjectRoot(ctx, thread, origin)
+	for _, delivery := range claimed {
+		if rootErr != nil {
+			_ = s.store.UpdateFileDelivery(ctx, thread.ID, snapshot.LatestTurnID, delivery.DirectiveIndex, model.FileDeliveryFailed, 0, rootErr.Error())
 			continue
 		}
-		file, info, openErr := openProjectDeliveryFile(thread.CWD, delivery.FilePath, maxTelegramDocumentBytes)
+		file, info, openErr := openFileDeliveryWithRetry(ctx, projectRoot, delivery.FilePath, waitForFileDeliveryRetry)
 		if openErr != nil {
 			_ = s.store.UpdateFileDelivery(ctx, thread.ID, snapshot.LatestTurnID, delivery.DirectiveIndex, model.FileDeliveryFailed, 0, openErr.Error())
 			continue

@@ -45,8 +45,9 @@ durable identity.
 
 ## File Boundary
 
-- Resolve only beneath the producing thread's Project cwd using an anchored
-  filesystem root.
+- Resolve Lead deliveries beneath the root of the Lead's bound Codex Project,
+  as reported by App Server. Legacy non-Lead routes use the producing thread
+  cwd. Use an anchored filesystem root in both cases.
 - Reject absolute paths, traversal, symlink escape, directories, devices,
   sockets, FIFOs, and files above 50 MB, matching the official cloud Bot API
   `sendDocument` limit.
@@ -72,6 +73,8 @@ durable identity.
 - Definite validation or Bot API failure becomes `failed`. A timeout after an
   upload may be `unknown`. Final Card/details show the bridge result; the Agent
   should say that it submitted a delivery, not claim that Telegram received it.
+- A local open failure waits five seconds and retries once. Upload failures are
+  not retried automatically because Telegram may already have accepted bytes.
 - Retrying requires a new explicit user request and turn. The operator is warned
   that retrying an `unknown` delivery may produce a duplicate.
 

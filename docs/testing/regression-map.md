@@ -12,6 +12,8 @@ Primary tests:
 - `internal/daemon/file_delivery_test.go::TestOpenProjectDeliveryFileEnforcesProjectBoundary`
 - `internal/daemon/file_delivery_linux_test.go::TestOpenProjectDeliveryFileRejectsFIFOWithoutBlocking`
 - `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesUsesBoundCodexProjectRoot`
+- `internal/daemon/file_delivery_test.go::TestOpenFileDeliveryWithRetryWaitsFiveSecondsAndRetriesOnce`
 - `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesRequiresCompletedTurn`
 - `internal/storage/store_file_deliveries_test.go::TestClaimFileDeliveriesFreezesTurnAndDeduplicates`
 - `internal/storage/store_file_deliveries_test.go::TestRecoverSendingFileDeliveriesMarksUnknown`
@@ -28,6 +30,8 @@ Contract notes:
   newly created turn in a Project with the exact `project-v1` marker.
 - Paths stay inside the bound Project, protected paths are rejected, and each
   regular file is limited to the cloud Bot API's 50 MB document limit.
+- Lead delivery resolves the bound Codex Project root. A local open failure is
+  retried once after five seconds; Telegram upload is not automatically retried.
 - Claims are durable before upload; sent files are not repeated, while ambiguous
   interrupted uploads become `unknown` and are not retried automatically.
 - Live Telegram validation must cover a successful send, a rejected path, and a
