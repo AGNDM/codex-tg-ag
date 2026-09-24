@@ -45,9 +45,15 @@ Lead 的 Telegram turn 默认使用 Codex 原生 `workspaceWrite`，可写范围
 ```text
 /agent policy
 /agent policy apply
+/agent policy install
 ```
 
 `apply` 会在该 Lead 的持久 thread 中启动一次正常 turn，把最新版政策写入长期上下文。之后每次 Telegram 发起的 Lead turn 都会附带一段很短的政策提醒，以抵抗长上下文和 compaction 后的遗忘。
+
+`install` 会在当前 Lead 绑定的 Codex Project 根目录缺少 `AGENTS.md` 时，
+排他创建标准 `project-v1` Policy。之后的新 turn 只注入短 marker，并使用
+不带 nonce 的文件协议 v2。若项目已经存在 `AGENTS.md`、symlink 或目录，
+命令不会改动它；请人工审阅并合并 Policy。正在运行的 v1 turn 不会中途切换。
 
 如果 Policy 已升级但尚未手动 `apply`，下一条普通任务会把完整新 Policy 与该任务一起注入，并自动登记新版本，不需要先执行单独命令。
 

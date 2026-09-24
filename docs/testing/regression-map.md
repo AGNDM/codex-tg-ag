@@ -12,6 +12,8 @@ Primary tests:
 - `internal/daemon/file_delivery_test.go::TestOpenProjectDeliveryFileEnforcesProjectBoundary`
 - `internal/daemon/file_delivery_linux_test.go::TestOpenProjectDeliveryFileRejectsFIFOWithoutBlocking`
 - `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesSendsOnceToSavedOrigin`
+- `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesUsesBoundCodexProjectRoot`
+- `internal/daemon/file_delivery_test.go::TestOpenFileDeliveryWithRetryWaitsFiveSecondsAndRetriesOnce`
 - `internal/daemon/file_delivery_test.go::TestProcessFinalFileDeliveriesRequiresCompletedTurn`
 - `internal/storage/store_file_deliveries_test.go::TestClaimFileDeliveriesFreezesTurnAndDeduplicates`
 - `internal/storage/store_file_deliveries_test.go::TestRecoverSendingFileDeliveriesMarksUnknown`
@@ -28,6 +30,8 @@ Contract notes:
   newly created turn in a Project with the exact `project-v1` marker.
 - Paths stay inside the bound Project, protected paths are rejected, and each
   regular file is limited to the cloud Bot API's 50 MB document limit.
+- Lead delivery resolves the bound Codex Project root. A local open failure is
+  retried once after five seconds; Telegram upload is not automatically retried.
 - Claims are durable before upload; sent files are not repeated, while ambiguous
   interrupted uploads become `unknown` and are not retried automatically.
 - Live Telegram validation must cover a successful send, a rejected path, and a
@@ -237,6 +241,10 @@ Primary tests:
 - `internal/storage/store_test.go::TestLeadAgentRegistryPersistsAndEnforcesIdentity`
 - `internal/daemon/service_test.go::TestCreateLeadAgentStartsPersistentSolThread`
 - `internal/daemon/service_test.go::TestLeadPolicyStatusAndApplyUsePersistentThread`
+- `internal/daemon/project_agent_policy_test.go::TestInstallProjectAgentPolicyCreatesCompleteFile`
+- `internal/daemon/project_agent_policy_test.go::TestInstallProjectAgentPolicyNeverOverwritesExistingEntry`
+- `internal/daemon/service_test.go::TestLeadProjectPolicyInstallCreatesMissingAgentsFile`
+- `internal/daemon/service_test.go::TestLeadProjectPolicyInstallPreservesExistingAgentsFile`
 - `internal/daemon/service_test.go::TestCurrentLeadPolicyAddsRuntimeReminder`
 - `internal/daemon/service_test.go::TestLeadAgentModelAndLifecycleStatus`
 
@@ -244,6 +252,9 @@ Contract notes:
 
 - Codex native subagent tools own spawn, wait, steering, and result consolidation.
 - The daemon stores a policy id/version, not mutable free-form policy text.
+- `/agent policy install` exclusively creates the standard `AGENTS.md` in the
+  current Lead's authoritative bound Project root and never changes an existing
+  entry. New turns then use compact project-v1/file-v2 prompts.
 - `luna_executor` is the default bounded worker; `astra_advisor` is a temporary read-only expert.
 - Lead Policy v3 identifies the environment and durable context, keeps Sol medium as the creation default, and permits any model currently advertised by App Server.
 - Telegram-started Lead turns explicitly restore Codex `workspaceWrite` for the bound Project root with `on-request` plus `auto_review`, so a sticky read-only audit turn cannot block later edits; ordinary threads are not broadened.

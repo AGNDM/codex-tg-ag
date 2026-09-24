@@ -23,7 +23,8 @@ Delivery is allowed only when all of these checks pass:
 - the turn has a persisted Telegram chat/topic origin;
 - the block version exactly matches the protocol frozen for that turn;
 - legacy protocol v1 turns also match their persisted nonce;
-- each path is relative to the turn's Project root and cannot escape it;
+- each path is relative to the Lead's bound Codex Project root and cannot escape
+  it; legacy non-Lead routes use the producing thread cwd;
 - the opened target is a regular file and protected runtime, credential, Git,
   SQLite, session, and environment paths are rejected;
 - each file is no larger than 50 MB, the Telegram cloud Bot API document limit.
@@ -33,6 +34,9 @@ freezes directives to the final-answer fingerprint and records one delivery row
 per directive before network IO. A delivered row is never sent automatically a
 second time. An interrupted or ambiguous upload is recorded as `unknown` and
 requires a new explicit operator request rather than an automatic retry.
+If opening the local file fails, the bridge waits five seconds and tries that
+open once more before recording a definite failure. Telegram upload itself is
+never retried automatically because the first upload may already have arrived.
 
 ## Consequences
 

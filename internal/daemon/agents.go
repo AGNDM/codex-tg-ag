@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,7 +91,13 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 			_, thread.DirectoryName = model.ProjectNameFromCWD(project.Roots[0])
 			_ = s.store.UpsertThread(ctx, *thread)
 		}
-		return &DirectResponse{Text: fmt.Sprintf("%s is now the lead for Codex Project %s. Its existing thread and context were preserved.", agent.Name, project.Name), ThreadID: agent.ThreadID}, nil
+		text := fmt.Sprintf("%s is now the lead for Codex Project %s. Its existing thread and context were preserved.", agent.Name, project.Name)
+		if len(project.Roots) == 0 || adoptedProjectAgentPolicy(project.Roots[0]) != projectAgentPolicyVersion {
+			text += "\nProject policy: legacy prompts. Run /agent policy install to create AGENTS.md, or merge the project-v1 policy manually if AGENTS.md already exists."
+		} else {
+			text += "\nProject policy: project-v1 (compact prompts and file v2)."
+		}
+		return &DirectResponse{Text: text, ThreadID: agent.ThreadID}, nil
 	}
 	if action == "model" {
 		if len(parts) != 2 {
@@ -107,15 +114,18 @@ func (s *Service) leadAgentCommand(ctx context.Context, chatID, topicID int64, r
 			return &DirectResponse{Text: "No lead agent is assigned to this topic. Use /agent create <name>."}, nil
 		}
 		if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" || strings.EqualFold(strings.TrimSpace(parts[1]), "show") {
-			return &DirectResponse{Text: renderLeadPolicyStatus(*agent), ThreadID: agent.ThreadID}, nil
+			return &DirectResponse{Text: renderLeadPolicyStatus(*agent) + "\n" + s.renderProjectPolicyStatus(ctx, *agent), ThreadID: agent.ThreadID}, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(parts[1]), "install") {
+			return s.installLeadProjectPolicy(ctx, *agent)
 		}
 		if !strings.EqualFold(strings.TrimSpace(parts[1]), "apply") {
-			return &DirectResponse{Text: "Usage: /agent policy | /agent policy apply"}, nil
+			return &DirectResponse{Text: "Usage: /agent policy | /agent policy apply | /agent policy install"}, nil
 		}
 		return s.applyLeadPolicy(ctx, chatID, topicID, *agent)
 	}
 	if action != "show" || len(parts) != 1 {
-		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project [project] | /agent model <model-id> [effort] | /agent policy [apply]"}, nil
+		return &DirectResponse{Text: "Usage: /agent create <name> | /agent show | /agent project [project] | /agent model <model-id> [effort] | /agent policy [apply|install]"}, nil
 	}
 	agent, err := s.store.GetLeadAgentByTopic(ctx, chatID, topicID)
 	if err != nil {
@@ -304,6 +314,50 @@ func (s *Service) applyLeadPolicy(ctx context.Context, chatID, topicID int64, ag
 	}
 	response.Text = fmt.Sprintf("Applying %s v%d to %s's persistent lead thread.", leadpolicy.ID, leadpolicy.Version, agent.Name)
 	return response, nil
+}
+
+func (s *Service) leadProjectPolicyRoot(ctx context.Context, agent model.LeadAgent) (string, error) {
+	client := s.settingsClient()
+	if client == nil {
+		return "", fmt.Errorf("app-server session is not ready")
+	}
+	if s.cfg.RequestTimeout <= 0 {
+		return s.leadProjectRoot(ctx, client, agent.ChatID, agent.TopicID, agent.ThreadID)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+	defer cancel()
+	return s.leadProjectRoot(requestCtx, client, agent.ChatID, agent.TopicID, agent.ThreadID)
+}
+
+func (s *Service) renderProjectPolicyStatus(ctx context.Context, agent model.LeadAgent) string {
+	root, err := s.leadProjectPolicyRoot(ctx, agent)
+	if err != nil || strings.TrimSpace(root) == "" {
+		return "Project policy: unavailable; bind a Codex Project first."
+	}
+	if adoptedProjectAgentPolicy(root) == projectAgentPolicyVersion {
+		return "Project policy: project-v1 (compact prompts and file v2)."
+	}
+	return "Project policy: legacy prompts; run /agent policy install."
+}
+
+func (s *Service) installLeadProjectPolicy(ctx context.Context, agent model.LeadAgent) (*DirectResponse, error) {
+	root, err := s.leadProjectPolicyRoot(ctx, agent)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(root) == "" {
+		return &DirectResponse{Text: "No Codex Project is bound to this Lead. Use /agent project first.", ThreadID: agent.ThreadID}, nil
+	}
+	if adoptedProjectAgentPolicy(root) == projectAgentPolicyVersion {
+		return &DirectResponse{Text: "Project policy project-v1 is already installed. New turns use compact prompts and file v2.", ThreadID: agent.ThreadID}, nil
+	}
+	if err := installProjectAgentPolicy(root); err != nil {
+		if errors.Is(err, errProjectAgentPolicyExists) {
+			return &DirectResponse{Text: "AGENTS.md already exists and was not changed. Merge the project-v1 policy into it manually; automatic install never overwrites project rules.", ThreadID: agent.ThreadID}, nil
+		}
+		return nil, err
+	}
+	return &DirectResponse{Text: "Installed Project policy project-v1 in AGENTS.md. New turns use compact prompts and file v2; an active v1 turn keeps its nonce until it finishes.", ThreadID: agent.ThreadID}, nil
 }
 
 func renderLeadPolicyStatus(agent model.LeadAgent) string {
