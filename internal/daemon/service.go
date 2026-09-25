@@ -503,7 +503,7 @@ func (s *Service) ensureLiveSessionLocked(ctx context.Context) {
 	defer cancel()
 	started := time.Now()
 	s.logLifecycle("appserver_session_start", lifecycleFields{"role": "live"})
-	if err := client.Start(sessionCtx); err != nil {
+	if err := s.startSessionWithPhase(sessionCtx, client, "live"); err != nil {
 		_ = s.store.SetState(ctx, "appserver.live.last_error", sanitizeDiagnosticString(err.Error()))
 		s.logLifecycle("appserver_session_start_failed", lifecycleFields{
 			"role":        "live",
@@ -553,7 +553,7 @@ func (s *Service) ensurePollSessionLocked(ctx context.Context) {
 	defer cancel()
 	started := time.Now()
 	s.logLifecycle("appserver_session_start", lifecycleFields{"role": "poll"})
-	if err := client.Start(sessionCtx); err != nil {
+	if err := s.startSessionWithPhase(sessionCtx, client, "poll"); err != nil {
 		_ = s.store.SetState(ctx, "appserver.poll.last_error", sanitizeDiagnosticString(err.Error()))
 		s.logLifecycle("appserver_session_start_failed", lifecycleFields{
 			"role":        "poll",
@@ -585,6 +585,31 @@ func (s *Service) ensureSessionLifecycle(ctx context.Context) {
 	defer s.sessionMu.Unlock()
 	s.ensureLiveSessionLocked(ctx)
 	s.ensurePollSessionLocked(ctx)
+}
+
+func (s *Service) startSessionWithPhase(ctx context.Context, client Session, role string) error {
+	finished := make(chan struct{})
+	started := time.Now()
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-finished:
+				return
+			case <-ticker.C:
+				phase := "unknown"
+				if reporter, ok := client.(interface{ StartPhase() string }); ok {
+					phase = reporter.StartPhase()
+				}
+				s.logLifecycle("appserver_session_start_pending", lifecycleFields{
+					"role": role, "phase": phase, "duration_ms": time.Since(started).Milliseconds(),
+				})
+			}
+		}
+	}()
+	defer close(finished)
+	return client.Start(ctx)
 }
 
 func (s *Service) liveEventLoop(ctx context.Context, live Session, ch <-chan appserver.Event, generation uint64) {

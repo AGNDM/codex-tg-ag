@@ -2,11 +2,15 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -298,6 +302,260 @@ sleep 5
 		t.Fatalf("Request after failed Start error = %v, want not running", requestErr)
 	}
 }
+
+func TestStartReturnsWhenInitializeResponseStalls(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake app-server shell script is Unix-only")
+	}
+	root := t.TempDir()
+	script := writeFakeAppServer(t, root, `#!/bin/sh
+set -eu
+IFS= read -r line
+sleep 30
+`)
+	client := NewClient(script, "stdio", root, 30*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := client.Start(ctx)
+	if err == nil {
+		t.Fatal("Start succeeded, want context cancellation while initialize is unanswered")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Start took %s after initialize stalled, want prompt return", elapsed)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.started || client.cmd != nil || client.stdin != nil || len(client.pending) != 0 {
+		t.Fatalf("client state after stalled Start: started=%t cmd_nil=%t stdin_nil=%t pending=%d", client.started, client.cmd == nil, client.stdin == nil, len(client.pending))
+	}
+}
+
+func TestCloseReturnsPromptlyWhenChildStalls(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake app-server shell script is Unix-only")
+	}
+	root := t.TempDir()
+	script := writeFakeAppServer(t, root, `#!/bin/sh
+set -eu
+if IFS= read -r line; then
+  printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+fi
+sleep 30
+`)
+	client := NewClient(script, "stdio", root, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	started := time.Now()
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Close took %s while child stalled, want prompt return", elapsed)
+	}
+}
+
+func TestCloseTerminatesLauncherChild(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process state check uses Linux /proc")
+	}
+	root := t.TempDir()
+	childPath := filepath.Join(root, "child.pid")
+	t.Setenv("CODEX_TG_FAKE_CHILD_PID", childPath)
+	script := writeFakeAppServer(t, root, `#!/bin/sh
+set -eu
+if IFS= read -r line; then
+  printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+fi
+sleep 30 &
+printf '%s\n' "$!" > "$CODEX_TG_FAKE_CHILD_PID"
+wait
+`)
+	client := NewClient(script, "stdio", root, 2*time.Second)
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	var childPID int
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		data, err := os.ReadFile(childPath)
+		if err == nil {
+			childPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
+			if err != nil {
+				t.Fatalf("parse child pid: %v", err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID == 0 {
+		_ = client.Close()
+		t.Fatal("fake launcher did not record child pid")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(childPID), "stat"))
+		if os.IsNotExist(err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("read child state: %v", err)
+		}
+		if parts := strings.SplitN(string(data), ") ", 2); len(parts) == 2 && strings.HasPrefix(parts[1], "Z") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("launcher child %d survived Close", childPID)
+}
+
+func TestRequestReturnsWhenChildStopsReadingStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake app-server shell script is Unix-only")
+	}
+	root := t.TempDir()
+	script := writeFakeAppServer(t, root, `#!/bin/sh
+set -eu
+if IFS= read -r line; then
+  printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+fi
+sleep 30
+`)
+	client := NewClient(script, "stdio", root, 2*time.Second)
+	defer client.Close()
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := client.Request(ctx, "thread/list", map[string]any{"padding": strings.Repeat("x", 1<<20)})
+	if err == nil {
+		t.Fatal("Request succeeded, want stdin write timeout")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Request took %s with stalled stdin, want prompt return", elapsed)
+	}
+}
+
+func TestWriteRPCDoesNotWriteAfterCancellation(t *testing.T) {
+	client := NewClient("codex", "stdio", t.TempDir(), time.Second)
+	var writes atomic.Int32
+	writer := testWriteCloser{write: func(p []byte) (int, error) {
+		writes.Add(1)
+		return len(p), nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.writeRPC(ctx, writer, []byte(`{"method":"turn/start"}`)); err == nil {
+		t.Fatal("writeRPC succeeded with canceled context")
+	}
+	if got := writes.Load(); got != 0 {
+		t.Fatalf("writes = %d, want none after cancellation", got)
+	}
+}
+
+func TestWriteRPCDoesNotWriteAfterQueuedCancellation(t *testing.T) {
+	client := NewClient("codex", "stdio", t.TempDir(), time.Second)
+	<-client.writeToken
+	var writes atomic.Int32
+	writer := testWriteCloser{write: func(p []byte) (int, error) {
+		writes.Add(1)
+		return len(p), nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := client.writeRPC(ctx, writer, []byte(`{"method":"turn/start"}`)); err == nil {
+		t.Fatal("writeRPC succeeded while queued context expired")
+	}
+	client.writeToken <- struct{}{}
+	if got := writes.Load(); got != 0 {
+		t.Fatalf("writes = %d, want none after queued cancellation", got)
+	}
+}
+
+func TestWriteRPCReturnsWhenWriteBlocks(t *testing.T) {
+	client := NewClient("codex", "stdio", t.TempDir(), time.Second)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	writer := testWriteCloser{write: func(p []byte) (int, error) {
+		close(entered)
+		<-release
+		return len(p), nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if err := client.writeRPC(ctx, writer, []byte(`{"method":"thread/list"}`)); err == nil {
+		t.Fatal("writeRPC succeeded despite blocked write")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked write took %s, want prompt return", elapsed)
+	}
+	select {
+	case <-entered:
+	default:
+		t.Fatal("writer was not entered")
+	}
+	close(release)
+	select {
+	case <-client.writeToken:
+	case <-time.After(time.Second):
+		t.Fatal("write token was not released after writer exited")
+	}
+}
+
+func TestWriteRPCPartialErrorTerminatesTransport(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process state check uses Linux /proc")
+	}
+	client := NewClient("codex", "stdio", t.TempDir(), time.Second)
+	cmd := exec.Command("sleep", "30")
+	configureCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake transport: %v", err)
+	}
+	writer := &testWriteCloser{write: func(p []byte) (int, error) {
+		return len(p) / 2, errors.New("partial write")
+	}}
+	client.mu.Lock()
+	client.cmd = cmd
+	client.stdin = writer
+	client.started = true
+	client.mu.Unlock()
+	defer client.Close()
+	if err := client.writeRPC(context.Background(), writer, []byte(`{"method":"turn/start"}`)); err == nil {
+		t.Fatal("writeRPC succeeded after partial write")
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "stat"))
+		if os.IsNotExist(err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("read transport process state: %v", err)
+		}
+		if parts := strings.SplitN(string(data), ") ", 2); len(parts) == 2 && strings.HasPrefix(parts[1], "Z") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("transport survived partial write error")
+}
+
+type testWriteCloser struct {
+	write func([]byte) (int, error)
+}
+
+func (w testWriteCloser) Write(p []byte) (int, error) { return w.write(p) }
+func (w testWriteCloser) Close() error                { return nil }
 
 func writeFakeAppServer(t *testing.T, root, body string) string {
 	t.Helper()

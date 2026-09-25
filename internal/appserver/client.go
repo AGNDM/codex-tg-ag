@@ -39,6 +39,7 @@ type Client struct {
 	requestTimeout time.Duration
 
 	startMu        sync.Mutex
+	writeToken     chan struct{}
 	mu             sync.Mutex
 	cmd            *exec.Cmd
 	stdin          io.WriteCloser
@@ -53,14 +54,18 @@ type Client struct {
 	readerDone     chan struct{}
 	stderrDone     chan struct{}
 	serverRequests map[string]map[string]any
+	startPhase     string
 }
 
 func NewClient(codexBin, listenURL, cwd string, requestTimeout time.Duration) *Client {
+	writeToken := make(chan struct{}, 1)
+	writeToken <- struct{}{}
 	return &Client{
 		codexBin:       codexBin,
 		listenURL:      listenURL,
 		cwd:            cwd,
 		requestTimeout: requestTimeout,
+		writeToken:     writeToken,
 		pending:        map[uint64]chan rpcResponse{},
 		serverRequests: map[string]map[string]any{},
 		readerDone:     make(chan struct{}),
@@ -77,10 +82,11 @@ func (c *Client) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
+	c.startPhase = "build_command"
 	cmd, err := c.buildCommand()
 	if err != nil {
 		c.mu.Unlock()
-		return err
+		return fmt.Errorf("build app-server command: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -97,9 +103,10 @@ func (c *Client) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return err
 	}
+	c.startPhase = "launch"
 	if err := cmd.Start(); err != nil {
 		c.mu.Unlock()
-		return err
+		return fmt.Errorf("launch app-server: %w", err)
 	}
 	c.cmd = cmd
 	c.stdin = stdin
@@ -110,6 +117,7 @@ func (c *Client) Start(ctx context.Context) error {
 	generation := c.generation
 	c.readerDone = make(chan struct{})
 	c.stderrDone = make(chan struct{})
+	c.startPhase = "initialize"
 	c.mu.Unlock()
 
 	go c.readStdout(generation)
@@ -122,14 +130,28 @@ func (c *Client) Start(ctx context.Context) error {
 			"version": version.Version,
 		},
 	}); err != nil {
-		_ = c.closeRunning()
-		return err
+		closeErr := c.closeRunning()
+		return errors.Join(fmt.Errorf("initialize app-server: %w", err), closeErr)
 	}
+	c.setStartPhase("notify_initialized")
 	if err := c.Notify(ctx, "initialized", nil); err != nil {
-		_ = c.closeRunning()
-		return err
+		closeErr := c.closeRunning()
+		return errors.Join(fmt.Errorf("notify app-server initialized: %w", err), closeErr)
 	}
+	c.setStartPhase("ready")
 	return nil
+}
+
+func (c *Client) setStartPhase(phase string) {
+	c.mu.Lock()
+	c.startPhase = phase
+	c.mu.Unlock()
+}
+
+func (c *Client) StartPhase() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.startPhase
 }
 
 func (c *Client) Close() error {
@@ -156,8 +178,10 @@ func (c *Client) closeRunning() error {
 	c.stderr = nil
 	c.mu.Unlock()
 
-	if stdin != nil {
-		_ = stdin.Close()
+	// Kill the whole wrapper process group before closing stdin. The Codex npm
+	// launcher starts a child that can otherwise keep the pipe open indefinitely.
+	if cmd != nil && cmd.Process != nil {
+		killCommand(cmd)
 	}
 	for _, ch := range pending {
 		select {
@@ -166,11 +190,29 @@ func (c *Client) closeRunning() error {
 		}
 		close(ch)
 	}
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+	var closeErr error
+	if stdin != nil {
+		closed := make(chan error, 1)
+		go func() { closed <- stdin.Close() }()
+		select {
+		case closeErr = <-closed:
+		case <-time.After(time.Second):
+			closeErr = errors.New("app-server stdin did not close after kill")
+		}
 	}
-	return nil
+	if cmd != nil && cmd.Process != nil {
+		waitDone := make(chan struct{})
+		go func() {
+			_, _ = cmd.Process.Wait()
+			close(waitDone)
+		}()
+		select {
+		case <-waitDone:
+		case <-time.After(time.Second):
+			return errors.Join(closeErr, errors.New("app-server process did not exit after kill"))
+		}
+	}
+	return closeErr
 }
 
 func (c *Client) Subscribe() <-chan Event {
@@ -204,9 +246,11 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 	}
 	payload, err := json.Marshal(message)
 	if err != nil {
+		c.removePending(id)
 		return nil, err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeRPC(ctx, stdin, payload); err != nil {
+		c.removePending(id)
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": method, "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return nil, err
 	}
@@ -226,14 +270,10 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 		}
 		return response.Result, nil
 	case <-time.After(timeout):
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		c.removePending(id)
 		return nil, fmt.Errorf("request timeout for %s", method)
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		c.removePending(id)
 		return nil, ctx.Err()
 	}
 }
@@ -257,11 +297,78 @@ func (c *Client) Notify(ctx context.Context, method string, params map[string]an
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeRPC(ctx, stdin, payload); err != nil {
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": method, "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return err
 	}
 	return nil
+}
+
+func (c *Client) removePending(id uint64) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+// writeRPC bounds the pipe write itself. A child stuck during initialization
+// can stop reading stdin, so a timeout around the response alone is insufficient.
+func (c *Client) writeRPC(ctx context.Context, stdin io.WriteCloser, payload []byte) error {
+	writeCtx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	defer cancel()
+	select {
+	case <-c.writeToken:
+	case <-writeCtx.Done():
+		return writeCtx.Err()
+	}
+	if err := writeCtx.Err(); err != nil {
+		c.writeToken <- struct{}{}
+		return err
+	}
+	result := make(chan error, 1)
+	go func() {
+		defer func() { c.writeToken <- struct{}{} }()
+		if writer, ok := stdin.(interface{ SetWriteDeadline(time.Time) error }); ok {
+			// Anonymous Windows pipes do not support deadlines. The caller's
+			// context still bounds the write in that case.
+			if err := writer.SetWriteDeadline(writeDeadline(writeCtx, c.requestTimeout)); err == nil {
+				defer writer.SetWriteDeadline(time.Time{})
+			}
+		}
+		_, err := io.WriteString(stdin, string(payload)+"\n")
+		if err != nil {
+			c.abortStalledWrite(stdin)
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	case <-writeCtx.Done():
+		// The child may have stopped reading stdin. Terminate it so the pipe
+		// writer exits; closeRunning will reap the process and clear state.
+		c.abortStalledWrite(stdin)
+		return writeCtx.Err()
+	}
+}
+
+func (c *Client) abortStalledWrite(stdin io.WriteCloser) {
+	c.mu.Lock()
+	cmd := c.cmd
+	current := c.stdin == stdin
+	c.mu.Unlock()
+	if current {
+		killCommand(cmd)
+	}
+}
+
+func writeDeadline(ctx context.Context, fallback time.Duration) time.Time {
+	if deadline, ok := ctx.Deadline(); ok {
+		return deadline
+	}
+	return time.Now().Add(fallback)
 }
 
 func (c *Client) RespondServerRequest(ctx context.Context, requestID string, result map[string]any) error {
@@ -281,7 +388,7 @@ func (c *Client) RespondServerRequest(ctx context.Context, requestID string, res
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(stdin, string(payload)+"\n"); err != nil {
+	if err := c.writeRPC(ctx, stdin, payload); err != nil {
 		c.broadcast(Event{Channel: "transport_error", Params: map[string]any{"stream": "stdin", "method": "serverRequest/respond", "error": err.Error(), "stderr_tail": c.StderrTail()}})
 		return err
 	}
@@ -825,11 +932,13 @@ func (c *Client) buildCommand() (*exec.Cmd, error) {
 			command := fmt.Sprintf("%s app-server --listen %s", executable, c.listenURL)
 			cmd := exec.Command(os.Getenv("ComSpec"), "/d", "/c", command)
 			cmd.Dir = c.cwd
+			configureCommand(cmd)
 			return cmd, nil
 		}
 	}
 	cmd := exec.Command(executable, "app-server", "--listen", c.listenURL)
 	cmd.Dir = c.cwd
+	configureCommand(cmd)
 	return cmd, nil
 }
 
